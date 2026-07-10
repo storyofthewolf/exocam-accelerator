@@ -44,6 +44,11 @@ In a hybrid run:
   `pop_frc.gx3v7.110128_annual_mean.nc` for mixed/Earth-continent cases.
   Confirmed in `ocean_initial_examples/`: monthly climatology of `T`, `S`,
   `U`, `V`, `hblt`, `qdp` on the model grid.
+  **However (user-supplied fact, 2026-07-10): this ExoCAM installation is
+  modified so a hybrid reboot can ingest `docn.r` directly** — the SOM
+  prognostic temperature (`somtp`) is *not* reset from the static
+  climatology. `pop_frc` remains the Q-flux/forcing source, but the ocean
+  state survives a hybrid restart.
 - **CICE and CLM have no `.i.` files in the reference sets.** In CESM1-era
   hybrid runs these components still initialize from their `.r.` files from
   the reference set (CLM alternatively via `finidat`). So ice/land
@@ -136,22 +141,25 @@ path is strongly indicated.
 | Atmosphere T (`atm_temp`) | `T` | `cam.i` (as plain T); only `PT`+pbuf copies in `cam.r` | Hybrid strongly indicated (§3). Per-layer horizontal-mean deltas map naturally onto `T(time,lev,lat,lon)`. |
 | Land temperature (`land_temp`) | `T_SOISNO T_GRND T_LAKE T_VEG T_REF2M*` | `clm2.r` (column/pft vectors, `levtot=20` incl. 5 snow levels) | Edit `clm2.r` on either path. 1D column/pft indexing means the plugin needs the column→gridcell mapping for horizontal-mean tendencies; "levels" here are soil/snow depths, not atmosphere. |
 | Land hydrology (`land_hydro`) | `H2OSOI_LIQ H2OSOI_ICE H2OSNO SNOWDP WA ZWT` | `clm2.r` | Same as above; water-mass conservation constraint spans several variables. |
-| SOM ocean temperature | `somtp(gsize)` | `docn.r` | Editable in place for continuation; on hybrid the SOM is re-initialized from `pop_frc.*` — so ocean-temperature acceleration is *lost* on hybrid reboot unless a custom `pop_frc` is generated. Direct tension with the atmosphere's preference for hybrid. |
+| SOM ocean temperature | `somtp(gsize)` | `docn.r` | Editable in place on *either* path: the user's modified ExoCAM ingests `docn.r` on hybrid reboot (§1b), so ocean-temperature acceleration survives both continuation and hybrid. |
 
 The coupled-consistency problem in one sentence: **continuation preserves
-everything (including what we failed to update); hybrid re-derives everything
-CAM-side (including what we might have wanted to keep, and it resets the SOM
-ocean from a static forcing file).**
+everything (including what we failed to update); hybrid re-derives the
+CAM-side state while — thanks to the local docn.r modification — still
+keeping the accelerated ice, land, and ocean state.**
 
 ---
 
 ## 5. Open questions needing user decision / further verification
 
-- **O1 — Path per target, or one path for all?** A mixed strategy looks
-  natural from §4 (hybrid for atm-T; `.r.`-editing for ice/land/ocean), but a
-  single acceleration step usually touches several targets at once (snowball:
-  ice energy + surface/atm T + somtp). Do we standardize on one mechanism per
-  *step*, and if so which wins when targets conflict (docn vs cam)?
+- **O1 — Path per target, or one path for all?** With the docn.r ingestion
+  mod (§1b) removing the old docn-vs-cam conflict, either mechanism can now
+  carry a full multi-target step (snowball: ice energy + surface/atm T +
+  somtp) — the field *edits* are the same `.r.`-file edits either way, and
+  the choice reduces to how the run is relaunched (resubmit vs. hybrid
+  reboot) and whether CAM state is reused or re-derived. Decide the default
+  from the Tier-2 A/B result; per-step mixing of mechanisms is no longer
+  needed.
 - **O2 — Continuation after `cice.r` perturbation.** Does the CESM1 driver
   tolerate stale ice-fraction/exchange state in `cam.rs`/`cpl.r` on a
   continuation restart (re-converging within a coupling step or two), or does
@@ -170,11 +178,11 @@ ocean from a static forcing file).**
   `ICEFRAC` from `cam.i` are used or overridden by CICE/docn state in an
   active-ice SOM configuration. Determines whether surface-temperature
   acceleration on aquaplanets goes through `cam.i` or is ice/ocean-file-only.
-- **O5 — SOM ocean on hybrid.** If hybrid is chosen for atmosphere targets,
-  is losing the `somtp` state acceptable (it re-spins from `pop_frc`
-  climatology), or must the tool generate a case-specific `pop_frc` /
-  fall back to also editing `docn.r`? (Does docn even read `docn.r` on
-  hybrid? Verify.)
+- **O5 — SOM ocean on hybrid. RESOLVED (2026-07-10):** the user's modified
+  ExoCAM ingests `docn.r` on hybrid reboot, so `somtp` survives; no custom
+  `pop_frc` generation is needed. Residual verification item: locate/record
+  the modification in the ExoCAM source so the tool can assert its presence
+  before choosing the hybrid path on a given installation.
 - **O6 — rpointer & naming discipline.** In-place edits (prototype style,
   with `_backup` copies) keep rpointers valid; writing *new* dated restart
   files would require rewriting `rpointer.*` and case XML. Decide: in-place
@@ -205,13 +213,20 @@ accelerate the slow-manifold fields — do not touch `cam.r` at all.**
    atmosphere respond. Turbet accelerated atmospheric T only because their
    slow manifold *was* a 10-bar steam atmosphere — not our regime.
 
-2. **Continuation is the only path that preserves all three slow
-   components.** Hybrid reboot re-derives CAM state (nice) but resets
-   `somtp` from the static `pop_frc` climatology — it would *undo* the ocean
-   acceleration every step. Ice/land have no `.i.` files anyway, so hybrid
-   buys nothing for them. The one thing hybrid is good for — clean
-   atmospheric-T perturbation via `cam.i` — is unneeded if the atmosphere is
-   never perturbed.
+2. **Both paths now preserve the slow components** — the local docn.r
+   modification (§1b) means hybrid no longer loses the SOM ocean state, so
+   continuation and hybrid are genuinely competitive:
+   *continuation* is operationally simpler (resubmit; no `.i.`-regeneration
+   machinery, O3 deferred; no case reboot) and is the prototype's
+   empirically survived path, but carries the stale-coupler question (O2);
+   *hybrid* re-derives the CAM physics buffer and coupler exchange state
+   from scratch, eliminating O2 by construction, at the cost of requiring a
+   `cam.i` (O3) and a case reconfiguration per step. Continuation remains
+   the recommended *starting* point on simplicity grounds, but the Tier-2
+   test below is now a true A/B experiment between two viable mechanisms
+   rather than a validation of the only option — if continuation shows
+   coupling shocks, hybrid is the ready fallback for *all* targets, not
+   just atmospheric ones.
 
 3. **The stale coupler-state concern (O2) is likely transient.**
    `cam.rs`/`cpl.r` exchange fields (`Sf_ifrac`, `So_t`, `Si_snowh`) are
@@ -265,11 +280,13 @@ this order:
   indistinguishable. Isolates file-handling bugs (dtype, fill values,
   attribute fidelity) from science.
 
-- **Tier 2 — Shock test (answers O2 directly).** Apply a small known
-  perturbation to `cice.r` (+`somtp`), continue, and watch the first months
-  of coupler-adjacent fields (ICEFRAC, TS, surface fluxes) for a transient
-  vs. a crash. Optionally run the same perturbation as a hybrid reboot and
-  compare. This is the decisive experiment for continuation-vs-hybrid.
+- **Tier 2 — Shock test / A-B path comparison (answers O2 and O1).** Apply
+  the same small known perturbation to `cice.r` (+`somtp`) twice: once as a
+  continuation, once as a hybrid reboot (viable for all targets given the
+  docn.r ingestion mod, §1b). Watch the first months of coupler-adjacent
+  fields (ICEFRAC, TS, surface fluxes) for transients vs. crashes, and
+  compare the two trajectories after the adjustment period. This is the
+  decisive experiment for choosing the default path.
 
 - **Tier 3 — Twin convergence experiment (the gold standard).** Pick an
   archived case that took ~200 yr to converge — its true equilibrium is
