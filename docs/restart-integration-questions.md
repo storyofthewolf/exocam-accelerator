@@ -189,12 +189,98 @@ ocean from a static forcing file).**
   budgets describe. Check whether budget diagnostics tolerate the jump or
   need resetting (likely benign — diagnostics only — but verify).
 
-## 6. Recommendation sketch (for discussion, not settled)
+## 6. Recommended path + test plan (session-1 recommendation, discussed 2026-07-10)
 
-Start with the `aqua_ice` target via **in-place `cice.r` (+`docn.r`) edits and
-plain continuation**, because (a) it's the prototype's empirically survived
-path, (b) no `.i.` files exist for ice anyway, and (c) it defers the
-`.i.`-regeneration machinery (O3). Treat **hybrid reboot as the mechanism for
-atmosphere-temperature targets** later, after O4/O5 are verified against
-source. Either way, the step driver must snapshot the full pre-jump restart
-set for the safeguard-6 rollback.
+### 6a. Recommended method
+
+**Use in-place `.r.`-edit + continuation as the primary mechanism, and only
+accelerate the slow-manifold fields — do not touch `cam.r` at all.**
+
+1. **The atmosphere is not the slow component.** In snowball/cold-regime
+   cases the multi-century convergence lives in ice energy/volume
+   (`cice.r`), SOM ocean temperature (`docn.r: somtp`), and soil state
+   (`clm2.r`). The atmosphere equilibrates on its radiative timescale (a few
+   years) and re-derives itself for free during the post-jump segment. This
+   mirrors Wordsworth exactly: extrapolate only the ice, re-run, let the
+   atmosphere respond. Turbet accelerated atmospheric T only because their
+   slow manifold *was* a 10-bar steam atmosphere — not our regime.
+
+2. **Continuation is the only path that preserves all three slow
+   components.** Hybrid reboot re-derives CAM state (nice) but resets
+   `somtp` from the static `pop_frc` climatology — it would *undo* the ocean
+   acceleration every step. Ice/land have no `.i.` files anyway, so hybrid
+   buys nothing for them. The one thing hybrid is good for — clean
+   atmospheric-T perturbation via `cam.i` — is unneeded if the atmosphere is
+   never perturbed.
+
+3. **The stale coupler-state concern (O2) is likely transient.**
+   `cam.rs`/`cpl.r` exchange fields (`Sf_ifrac`, `So_t`, `Si_snowh`) are
+   one-coupling-interval snapshots; after a perturbed continuation they are
+   wrong for exactly one coupling step. The prototype survived this
+   repeatedly with `aqua_ice` — weak but real evidence. Verify with the
+   Tier-2 test below rather than engineering around it.
+
+4. **Per-variable application.** Measure tendencies from **annual means** (or
+   `int1` running means), never raw monthly values — otherwise Δt multiplies
+   the seasonal cycle. For `somtp` and ice fields, extrapolate **pointwise on
+   annual-mean tendencies** (Wordsworth-style — a horizontal-mean delta would
+   freeze the evolving meridional pattern), but run the trustworthiness gate
+   on the global/hemispheric-mean series and apply the clip pointwise. For
+   cice, preserve energy density: scale `eicen`/`esnon` proportionally with
+   `vicen`/`vsnon` (the prototype's common-factor scaling had this property;
+   keep it deliberately), and let the plugin reconcile `aicen`/`iceumask`
+   afterward.
+
+5. **Snapshot the full pre-jump restart set every step** (the prototype's
+   `_backup` habit, formalized) — the safeguard-6 consistency check needs it
+   for rollback.
+
+Plugin implementation order: `somtp` first (one variable, trivial file), then
+cice, then clm — each tier of testing below extends naturally as plugins
+land. Hybrid reboot remains the fallback mechanism for atmosphere-temperature
+targets if a regime ever needs them, after O4/O5 are verified against source.
+
+### 6b. Test plan
+
+The 100–200 yr monthly-mean archives on the HPC are the key asset: they
+contain ground truth for exactly the quantity this tool predicts. Test in
+this order:
+
+- **Tier 0 — Offline hindcast validation (no new runs; can start now).**
+  Truncate an archived series at year N, fit the tendency over a trailing
+  window, extrapolate by Δt, and compare against what the simulation
+  actually did at year N+Δt. Sweep N, window length, and Δt across the
+  archive. Deliverables, before touching any restart file:
+  (a) skill maps of forward-Euler accuracy per variable/regime/Δt;
+  (b) empirically calibrated gate thresholds (`max_curvature_ratio`, window
+  length) — the gate should refuse exactly the (N, Δt) pairs where the
+  extrapolation would have missed, with a measured false-alarm rate;
+  (c) a defensible Δt schedule instead of Wordsworth's trial-and-error.
+  Runs directly on exocam-trend output via `trend_io.py`; the safeguard core
+  already supports it.
+
+- **Tier 1 — Null test (cheap; one short run).** Rewrite a restart set
+  through the future file layer with **zero delta**, continue, and compare
+  against an untouched continuation. Should be bit-for-bit or
+  indistinguishable. Isolates file-handling bugs (dtype, fill values,
+  attribute fidelity) from science.
+
+- **Tier 2 — Shock test (answers O2 directly).** Apply a small known
+  perturbation to `cice.r` (+`somtp`), continue, and watch the first months
+  of coupler-adjacent fields (ICEFRAC, TS, surface fluxes) for a transient
+  vs. a crash. Optionally run the same perturbation as a hybrid reboot and
+  compare. This is the decisive experiment for continuation-vs-hybrid.
+
+- **Tier 3 — Twin convergence experiment (the gold standard).** Pick an
+  archived case that took ~200 yr to converge — its true equilibrium is
+  already known. Restart from ~year 30, run the full accelerated loop
+  (gate + clip + schedule + consistency check), and verify it lands on the
+  same equilibrium within internal variability while counting core-hours
+  saved. Also the headline figure for any eventual paper.
+
+- **Tier 4 — Nonlinearity stress test.** Run a case near the ice-albedo
+  bifurcation (near-snowball insolation). Confirm the gate refuses near the
+  transition; then deliberately disable it, over-jump across the
+  bifurcation, and confirm the post-step consistency check flags the model
+  correcting away and triggers rollback. This validates the two safeguards
+  that only earn their keep in exactly this situation.
