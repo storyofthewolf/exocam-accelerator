@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mdls -name kMDItemNumberOfPages Wordsworth_etal_2013.pdf Turbet_etal_2021.pdf)",
+      "Bash(pdfinfo Wordsworth_etal_2013.pdf)",
+      "Bash(pdfinfo Turbet_etal_2021.pdf)",
+      "Bash(pip3 list *)",
+      "Bash(pip install *)",
+      "Bash(sh -c 'scratch=/private/tmp/claude-193893/-Users-wolfe-Desktop-projects-exocam-accelerate/be75d4ad-89a2-48ca-ac76-4347f8d21756/scratchpad/headers; mkdir -p $scratch; for f in restart_set_examples/*/*.nc; do out=$scratch/$\\(echo $f | sed \"s|restart_set_examples/||; s|/|__|g\"\\).txt; ncdump -h \"$f\" > \"$out\"; done; wc -l $scratch/*.txt | sort -n | tail -30')",
+      "Bash(sh -c 'H=/private/tmp/claude-193893/-Users-wolfe-Desktop-projects-exocam-accelerate/be75d4ad-89a2-48ca-ac76-4347f8d21756/scratchpad/headers; echo \"== cam.rs ==\"; sed -n \"1,40p\" $H/cam_aqua_fv__ExoCAM_thai_hab1_L51_n68equiv.cam.rs.0217-01-01-00000.nc.txt; echo; echo \"== cpl.r variable count and sample ==\"; grep -cE \"^\\\\s+double\" $H/cam_aqua_fv__ExoCAM_thai_hab1_L51_n68equiv.cpl.r.0217-01-01-00000.nc.txt; grep -E \"^\\\\s+double\" $H/cam_aqua_fv__ExoCAM_thai_hab1_L51_n68equiv.cpl.r.0217-01-01-00000.nc.txt | head -12')",
+      "Bash(ncdump -h ocean_initial_examples/pop_frc.4x5d.090130_aquaplanet_300Kiso.nc)"
+    ]
+  }
+}
