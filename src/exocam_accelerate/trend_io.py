@@ -15,6 +15,7 @@ exocam-trend grows that capability.
 
 from __future__ import annotations
 
+import glob
 from pathlib import Path
 from typing import Dict, List
 
@@ -23,6 +24,10 @@ import numpy as np
 from .trends import TrendSeries
 
 MONTHS_PER_YEAR = 12.0
+
+# exocam-trend writes one file per component per case, suffixed by stream.
+# A case is the set of these files sharing a <case>_<first>-<last> stem.
+_COMPONENT_SUFFIXES = ("cam", "cice", "clm")
 
 
 def read_trend_text(path) -> Dict[str, np.ndarray]:
@@ -68,3 +73,50 @@ def trend_series(columns: Dict[str, np.ndarray], variable: str,
         months = months[-last_n_months:]
         values = values[-last_n_months:]
     return TrendSeries(times=months / MONTHS_PER_YEAR, values=values)
+
+
+def load_case(directory, case_id: str) -> Dict[str, np.ndarray]:
+    """Merge a case's per-component exocam-trend files into one column dict.
+
+    exocam-trend writes ``<case>_<first>-<last>_{cam,cice,clm}.txt`` (the
+    sea-ice/snowpack variables live in the ``_cice`` file, ICEFRAC/energy in
+    ``_cam``, land in ``_clm``). This finds every component file whose name
+    starts with ``case_id`` in ``directory`` and returns their columns merged
+    under a shared ``month`` axis, so a variable can be requested without the
+    caller knowing which component emitted it.
+
+    Raises if the component files disagree on their month axis (they should be
+    identical when generated together by ``run_trend_batch.sh``).
+    """
+    directory = Path(directory)
+    merged: Dict[str, np.ndarray] = {}
+    month_axis = None
+    found: List[str] = []
+    for suffix in _COMPONENT_SUFFIXES:
+        matches = sorted(glob.glob(str(directory / f"{case_id}_*_{suffix}.txt")))
+        for path in matches:
+            cols = read_trend_text(path)
+            if month_axis is None:
+                month_axis = cols["month"]
+                merged["month"] = month_axis
+            elif not np.array_equal(cols["month"], month_axis):
+                raise ValueError(
+                    f"{path}: month axis differs from earlier component file(s) "
+                    f"for case {case_id!r}; were they generated in one run?"
+                )
+            for name, arr in cols.items():
+                if name == "month":
+                    continue
+                if name in merged:
+                    raise ValueError(
+                        f"{path}: column {name!r} already loaded for case "
+                        f"{case_id!r} from another component"
+                    )
+                merged[name] = arr
+            found.append(Path(path).name)
+    if not found:
+        raise FileNotFoundError(
+            f"no exocam-trend files matching {case_id}_*_{{cam,cice,clm}}.txt "
+            f"in {directory}"
+        )
+    return merged

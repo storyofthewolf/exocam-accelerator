@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from exocam_accelerate.trend_io import read_trend_text, trend_series
+from exocam_accelerate.trend_io import load_case, read_trend_text, trend_series
 
 # Matches the documented exocam-trend data/*.txt format:
 # month  VAR_native  VAR_int1  VAR_int2 ... per variable
@@ -55,3 +55,45 @@ class TestTrendSeries:
         cols = read_trend_text(trend_file)
         with pytest.raises(KeyError):
             trend_series(cols, "FLNT")
+
+
+# exocam-trend writes one file per component; a case merges them.
+CAM_FIXTURE = """month  TS_native  TS_int1  TS_int2
+1  250.0  250.0  250.0
+2  250.5  250.2  250.2
+"""
+CICE_FIXTURE = """month  hi_native  hi_int1  hi_int2  vicen005_native  vicen005_int1  vicen005_int2
+1  1.20  1.20  1.20  0.30  0.30  0.30
+2  1.25  1.22  1.22  0.31  0.30  0.30
+"""
+
+
+class TestLoadCase:
+    @pytest.fixture
+    def case_dir(self, tmp_path):
+        (tmp_path / "coldA_0001-01-0150-12_cam.txt").write_text(CAM_FIXTURE)
+        (tmp_path / "coldA_0001-01-0150-12_cice.txt").write_text(CICE_FIXTURE)
+        return tmp_path
+
+    def test_merges_components_under_one_month_axis(self, case_dir):
+        cols = load_case(case_dir, "coldA")
+        # atmosphere TS and sea-ice hi/vicen live together after merge
+        assert "TS_native" in cols and "hi_native" in cols and "vicen005_native" in cols
+        assert np.array_equal(cols["month"], [1, 2])
+
+    def test_variable_resolves_regardless_of_component(self, case_dir):
+        cols = load_case(case_dir, "coldA")
+        s = trend_series(cols, "hi", which="native")   # from the cice file
+        assert np.isclose(s.values[-1], 1.25)
+
+    def test_missing_case_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_case(tmp_path, "nope")
+
+    def test_mismatched_month_axis_raises(self, tmp_path):
+        (tmp_path / "b_0001-01-0002-12_cam.txt").write_text(CAM_FIXTURE)
+        (tmp_path / "b_0001-01-0002-12_cice.txt").write_text(
+            "month  hi_native  hi_int1  hi_int2\n1  1.0  1.0  1.0\n"
+        )  # only one month -> axis differs
+        with pytest.raises(ValueError):
+            load_case(tmp_path, "b")
