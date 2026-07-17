@@ -463,5 +463,13 @@ marks.
    hi)=0.97 — but those are aggregate/proxy fields, not the per-category
    quantities the plugin must conserve. **Still the gating data dependency.**
 
+**Future extension (design note only):** once the saturating step exists, the
+per-run `(X_eq, τ)` parameters can be *learned* across a suite of relaxations
+rather than fit fresh from each noisy window — predicting a new run's
+equilibration timescale from its opening decades. See
+`ml-learned-parameters.md`; its highest-leverage prerequisite (capture every
+future spin-up's trajectory as free training data) is worth acting on early and
+is independent of every open item above.
+
 Nothing here is committed to core code yet; this document records the state so
 the next pass starts from these findings, not from the `TS`-only linear view.
