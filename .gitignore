@@ -17,3 +17,6 @@ reference_papers/
 
 # Editor backups
 *~
+
+# Local Claude Code settings (machine-specific permissions)
+.claude/settings.local.json
