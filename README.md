@@ -69,6 +69,29 @@ Two further safeguards are **interface-designed but not yet implemented**:
 The CESM restart-file write/run-continuation layer is **not implemented yet**;
 see `docs/restart-integration-questions.md` for the open design questions.
 
+## Offline validation (Tier-0 hindcast)
+
+Before any restart file is touched, the method can be validated against ground
+truth the model archives already contain. The `hindcast` module scores
+forward-Euler extrapolation on existing time series with no new model runs:
+truncate an archived series at year *N*, fit a tendency over a trailing window,
+extrapolate by Δt through the real gate-and-clip pipeline, and compare to what
+the simulation actually did at *N* + Δt. Sweeping (*N*, window, Δt) over a set
+of archived runs yields:
+
+- **skill maps** — forward-Euler error per variable / regime / Δt
+  (`error_by_dt`);
+- **calibrated gate thresholds** — of the steps the gate accepted, how many the
+  extrapolation actually got right, and how many refusals were unnecessary
+  (`calibrate_gate`: `miss_rate`, `false_alarm_rate`);
+- **a defensible Δt schedule** — the largest Δt whose accepted hindcasts stay
+  within tolerance (`max_safe_dt`), rather than a hand-tuned one.
+
+This is Tier 0 of a five-tier test plan (`docs/restart-integration-questions.md`
+§6b) that progresses from offline hindcasts to a full twin-convergence
+experiment. It consumes `exocam-trend` text output via `trend_io`; the batch
+driver that generates that output lives in the `exocam-trend` repo.
+
 ## Related tools
 
 - [`exocam-trend`](../exocam-trend) (dependency) — produces global-mean
@@ -87,7 +110,9 @@ pytest
 
 ## Status
 
-Early scaffolding. Pure-computation safeguards implemented and tested;
-restart-file manipulation and run orchestration intentionally absent.
+Experimental. Pure-computation safeguards and the Tier-0 offline hindcast
+harness are implemented and tested (75 unit tests); restart-file manipulation
+and run orchestration are intentionally absent. The plugin and consistency
+interfaces are designed but not yet implemented.
 
 **Use with care and caution — model behavior is not always straightforward.**
