@@ -6,6 +6,14 @@ urgently, one thing worth doing *now* regardless of whether the ML is ever built
 
 ## The idea
 
+> **Update (2026-07-18):** `phase-space-extrapolation.md` supersedes the
+> time-domain framing below — the state is better extrapolated against the energy
+> imbalance `N` to `N = 0` than against time to `t → ∞`. The learned target
+> therefore shifts from "infer `τ`" to "infer the phase-space feedback relation
+> `Ts(N)` (its slope `λ` and any curvature/kink) from a short burst + case
+> descriptors." The data roadmap and small-data/GP reasoning below are unchanged
+> and apply verbatim to the phase-space parameters.
+
 Tier-0 §8 established the step model: the approach to equilibrium is a saturating
 relaxation, and stepping along a fitted
 
