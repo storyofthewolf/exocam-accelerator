@@ -92,6 +92,41 @@ This is Tier 0 of a five-tier test plan (`docs/restart-integration-questions.md`
 experiment. It consumes `exocam-trend` text output via `trend_io`; the batch
 driver that generates that output lives in the `exocam-trend` repo.
 
+## Jumping a cold aquaplanet case (`advise` → `jump` → continue)
+
+For cold/waterbelt aquaplanets whose slow drift is sea-ice growth. The TOA
+deficit `N` is conducted through the ice and freezes onto it, so
+`N ≈ a + b/hi` (Stefan-limited growth; `docs/phase-space-extrapolation.md`).
+A jump picks a target imbalance and sets the ice to the thickness that law
+says produces it, by scaling ice volume and enthalpy (`vicen`, `eicen`) in
+`cice.r` by one factor. Ice area, surface temperature and albedo are left
+alone, so the run resumes as a plain continuation.
+
+```bash
+# 1. on the HPC, in exocam-trend: trend series for the case (native + int2)
+./run_trend_batch.sh --cam --cice --nmonths <N> --int1 1 --int2 10 \
+    --outdir <trend_dir> <case>
+
+# 2. anywhere: recommendation (prints the ice factor, expected N and TS after
+#    the jump, and model years skipped; refuses when the fit can't be trusted)
+exocam-accelerate advise <trend_dir> <case> --json advice.json
+
+# 3. on the HPC, with the case stopped: apply it (dry run first)
+exocam-accelerate jump --rundir <rundir> --advice advice.json --dry-run
+exocam-accelerate jump --rundir <rundir> --advice advice.json
+
+# 4. resubmit as a continuation (CONTINUE_RUN=TRUE). After a few years, N should
+#    settle near the advice's N_after. If it does not, undo:
+exocam-accelerate restore --rundir <rundir>
+```
+
+`jump` edits the `cice.r` that `rpointer.ice` names, keeps a pristine
+`*.pre-accel.nc` copy (re-running a jump starts from it, so jumps never
+compound), and writes the advice alongside as `*.accel.json`. Defaults:
+remove half the current imbalance (`--n-fraction 0.5`), ice factor capped at
+1.5 (`--max-ice-factor`); hard bound 2.0 whatever the flags say. Snow is left
+alone unless `--snow-factor` is given.
+
 ## Related tools
 
 - [`exocam-trend`](../exocam-trend) (dependency) — produces global-mean
@@ -104,15 +139,18 @@ driver that generates that output lives in the `exocam-trend` repo.
 ## Install (development)
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,netcdf]"   # netcdf needed only for `jump`/`restore`
 pytest
 ```
 
 ## Status
 
-Experimental. Pure-computation safeguards and the Tier-0 offline hindcast
-harness are implemented and tested (75 unit tests); restart-file manipulation
-and run orchestration are intentionally absent. The plugin and consistency
-interfaces are designed but not yet implemented.
+Experimental. Pure-computation safeguards, the Tier-0 offline hindcast
+harness, the phase-space jump advisor, and the `aqua_ice` restart writer
+(cice.r, in place with backup, continuation) are implemented and tested (115
+unit tests). The advisor is validated offline on 15 cold cases; the first real
+jumps are the Tier-1/2 test of the restart path. Run orchestration, the
+consistency-check hook, and ocean (`somtp`) / land plugins are not
+implemented.
 
 **Use with care and caution — model behavior is not always straightforward.**

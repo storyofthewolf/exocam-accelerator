@@ -135,3 +135,86 @@ overshoots, the curved fit tracks.*
 - Everything above stays **offline**. The online run→jump→run harness (CLAUDE.md
   Open items O1/O2) remains out of scope; this note only establishes that the
   phase-space extrapolation is sound enough to eventually drive it.
+
+---
+
+## Ice growth is Stefan-limited (session 2026-09-25)
+
+Trying to extrapolate the ice reservoir `hi` to `N = 0` (for the jump advisor)
+failed badly: late in the runs the saturating fit wanted 700 m of ice. The
+reason is physical, and it reframes what an ice "jump" is.
+
+**The TOA deficit is being spent freezing ice, not leaking.** At year 148 the
+surface imbalance `energy_bot` matches `energy_top` (both −0.6 to −2.1 W/m²),
+and `hi` still grows 0.6–1.8 m/decade. Converting: 0.15 m/yr × ρ_i L
+(≈ 3×10⁸ J/m³) ≈ 1.5 W/m² — the size of the residual N. The earlier docs'
+"residual N ≈ −1.3 at the end of the runs" is not an endpoint bias; the runs
+are still equilibrating, through the ice.
+
+**`N × hi` is conserved.** In every case the product is constant to a few
+percent from year 30 to 150 (e.g. pt13: −101.0, −100.8, −100.6, −100.3, −99.0
+at yr 30/60/90/120/148). Fitting `N = a + b/hi` over yr 30–150 gives r² ≥ 0.98
+in 12/15 cases (0.91–0.98 in the other three), with `a` ∈ [−0.05, +0.54] W/m².
+This is conduction-limited (Stefan) growth: the deficit is conducted through
+ice of thickness `h` (flux ∝ ΔT/h) and freezes onto its base, so `h²` grows
+linearly in time and `N → a` only as `h → ∞`.
+
+**Consequences.**
+
+1. The ice never "equilibrates" at `N = 0` on any useful timescale — and
+   `N = 0` is not a meaningful jump target for it. A jump instead *chooses a
+   target imbalance* and sets the ice to the thickness the conduction law
+   says produces it: `h_target = b / (N_target − a)`, ice factor
+   `h_target / h_now`.
+2. The right fit form for the reservoir is **hyperbolic**, not linear or
+   saturating-exponential. Hindcast (truncate at year Y, 10-yr int2 window,
+   predict `hi` at the future N the run actually reached): median capture of
+   the true growth 0.90 to year 150, median error 2.0 m vs 6.2 m for linear
+   and 10.8 m for not jumping.
+3. It supplies a conversion from ice to *time*: since `h²` is linear in `t`,
+   `years_skipped ≈ (h_new² − h_now²) / (dh²/dt)`.
+4. TS stays well described by a linear `TS(N)` (Gregory); it is the
+   *reference* the post-jump run is checked against, not a field that is
+   written.
+5. The Stefan law and the fixed-area `vicen` scaling both assume a settled ice
+   edge. Windows ending at yr 20 (ICEFRAC still moving ≥ 0.03 per decade) were
+   the only systematic failures (≈ 50 % error); by yr 30 |ΔICEFRAC| is ~0.002
+   per decade. Hence the gate "|ΔICEFRAC| over the window ≤ 0.02".
+
+pt10 (the one full snowball, ICEFRAC = 1, and the concave `Ts(N)` case in
+Fig 12) has the weakest conduction-law fit and is refused by the advisor late
+in its run.
+
+## Advisor hindcast (defaults for `exocam-accelerate advise`)
+
+Driver scripts (outside the repo): `../scratch/advisor_hindcast.py`,
+`../scratch/advisor_endtoend.py`.
+
+**Window.** Accuracy is nearly flat in window length (median relative `hi`
+error 2–5 % for 10–40 yr windows at origins ≥ yr 30), but late in a run N moves
+~0.1 W/m² per decade, so short windows lack N-range and fail `|corr| ≥ 0.9`
+(yr 90–110 origins: 42 % accepted at 10 yr vs 84 % at 40 yr). Default: the
+longest of 40/30/20/10 yr over which the ice edge has settled.
+
+**End-to-end, default settings** (target = remove half the imbalance, ice
+factor clipped at 1.5). Each run truncated at Y = 30…130; the advisor's
+recommendation compared with the *real* run at the moment it actually reached
+the recommended thickness:
+
+| check | result |
+|---|---|
+| origins accepted | 144 / 165 (refusals concentrated at Y ≥ 100) |
+| recommended factor | median 1.50 (the clip binds) |
+| N_after − real N at arrival | median +0.09, p90 \|·\| 0.31 W/m² |
+| TS predicted − real TS at arrival | median −0.09, p90 \|·\| 0.39 K |
+| years_skipped / real years to arrival | median 0.95 (p10–p90 0.87–0.98) |
+
+One capped jump ≈ 180 model years of ice growth for these cases.
+
+**What this does not yet show.** It validates that the recommended state lies
+on the trajectory the run actually follows. It does not show that *writing*
+that ice into cice.r — with the SOM ocean, snow and atmosphere left as they
+are — lets the model continue along it. That is the Tier-1/Tier-2 test
+(restart-integration doc §6b), and the first real jumps are that test: after
+the continuation, N should settle near the advice's `N_after` within a few
+years.

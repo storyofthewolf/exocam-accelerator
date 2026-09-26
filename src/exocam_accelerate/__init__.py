@@ -5,6 +5,8 @@ Turbet et al. 2021 Methods §4), wrapped in safeguards that decide when the
 extrapolation is trustworthy and how large it may be. See README.md.
 """
 
+from .advise import Advice, AdvisorConfig, advise
+from .aqua_ice import AquaIcePlugin
 from .hindcast import (
     GateCalibration,
     HindcastResult,
@@ -15,6 +17,14 @@ from .hindcast import (
     hindcast_at,
     max_safe_dt,
     sweep_hindcasts,
+)
+from .phase_space import (
+    PhaseExtrapolation,
+    PhaseFit,
+    PhaseGateConfig,
+    extrapolate,
+    fit_linear,
+    fit_saturating,
 )
 from .safeguards import ClipReport, GateConfig, GateResult, assess_trustworthiness, clip_step
 from .schedule import DtSchedule
@@ -33,6 +43,16 @@ from .trends import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "Advice",
+    "AdvisorConfig",
+    "AquaIcePlugin",
+    "PhaseExtrapolation",
+    "PhaseFit",
+    "PhaseGateConfig",
+    "advise",
+    "extrapolate",
+    "fit_linear",
+    "fit_saturating",
     "ClipReport",
     "DtSchedule",
     "GateCalibration",

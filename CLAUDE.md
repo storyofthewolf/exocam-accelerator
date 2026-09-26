@@ -28,21 +28,28 @@ a bare multiplicative factor to restart fields with none of the safeguards).
 - **Hard per-step magnitude clip**, configurable per variable (Turbet: 50 K).
 - **Decreasing Δt schedule** (Wordsworth: 5×100 yr then 15×10 yr).
 - Post-jump physical constraints are **per-variable plugins** (interface in
-  `plugins.py`): e.g. aqua-ice must enforce ice ≥ 0 and conserve total water
-  mass. This is the only variable-specific piece.
+  `plugins.py`): e.g. aqua-ice enforces ice ≥ 0 / enthalpy ≤ 0 and no ice
+  from nothing. (Wordsworth's water-mass conservation does not apply to a
+  slab-ocean aquaplanet — the ocean is an unlimited source; see
+  `aqua_ice.py`.) This is the only variable-specific piece.
 - Post-step consistency check is a **hook** (interface in `consistency.py`):
   after the model runs forward from an accelerated restart, its own tendency
   must have continued along the predicted trajectory; otherwise roll back.
+- **Cold-aquaplanet jump (decided 2026-09-25):** in-place edit of `cice.r`
+  (`vicen`+`eicen`, one factor; `aicen` untouched) with a pristine
+  `.pre-accel.nc` backup, then a plain continuation. Jump size comes from the
+  Stefan conduction law `N = a + b/hi` (phase-space, target a chosen N, not
+  N=0) — `advise.py`, `aqua_ice.py`, `restart.py`, `cli.py`. See
+  `docs/restart-integration-questions.md` §7 and
+  `docs/phase-space-extrapolation.md`.
 
 ### Open (do NOT implement without a user decision)
 
-- **The CESM restart-write / run-continuation layer.** The central open
-  question: apply an accelerated state by modifying `.r.` files and doing a
-  simple continuation, or by modifying/creating `.i.` files and rebooting as a
-  hybrid run — and how each path treats perturbed fields (read verbatim vs.
-  re-derived at init). Findings and remaining decisions are in
-  `docs/restart-integration-questions.md`. Read that before touching this.
-- Implementations of the plugin and consistency interfaces.
+- **Other restart paths/targets.** Hybrid reboot (`.i.` files), `somtp`
+  (docn.r) and clm plugins, atmosphere fields. Remaining questions (O3–O8)
+  are in `docs/restart-integration-questions.md`.
+- The consistency-check implementation (the advice JSON's `N_after` / TS
+  reference is its intended input).
 - Run orchestration (submitting/monitoring the forward runs between jumps).
 - Turbet-style in-situ radiative heating-rate multiplication
   (`(P/Plim)^α`, α: 0.5 → 0.3 → 0) is **deferred indefinitely** — it requires
@@ -73,7 +80,13 @@ src/exocam_accelerate/
   schedule.py     decreasing Δt schedule
   stepper.py      gate → fit → extrapolate → clip pipeline (pure arrays)
   trend_io.py     parser for exocam-trend data/*.txt output (only file I/O in core)
-  plugins.py      VariableConstraint interface (design only — NotImplementedError)
+  hindcast.py     Tier-0 offline hindcast harness
+  phase_space.py  X-vs-N fits (linear / saturating / hyperbolic) + phase-space gate
+  advise.py       jump advisor: trend columns -> ice factor, N_after, TS reference
+  plugins.py      VariablePlugin interface + registry
+  aqua_ice.py     aqua_ice plugin (scale vicen/eicen, constraint pass)
+  restart.py      netCDF layer: cice.r in-place jump with backup, restore
+  cli.py          `exocam-accelerate advise|jump|restore`
   consistency.py  ConsistencyCheck interface (design only — NotImplementedError)
 tests/            pytest unit tests for everything implemented
 docs/restart-integration-questions.md   task-4 findings + open user decisions
@@ -83,7 +96,7 @@ docs/restart-integration-questions.md   task-4 findings + open user decisions
 
 - Time unit is **years** throughout; tendencies are per-year; Δt in years.
 - Pure-computation modules must stay free of file I/O and netCDF imports;
-  `netCDF4` belongs only to the future restart layer (optional extra).
+  `netCDF4` belongs only to `restart.py` (optional extra `[netcdf]`).
 - Reference restart files under `restart_set_examples/` are hundreds of MB:
   **header/metadata reads only** (`ncdump -h`), never read data payloads
   unless the user explicitly asks.

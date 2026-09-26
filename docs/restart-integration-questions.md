@@ -301,3 +301,34 @@ this order:
   bifurcation, and confirm the post-step consistency check flags the model
   correcting away and triggers rollback. This validates the two safeguards
   that only earn their keep in exactly this situation.
+
+---
+
+## 7. Decisions taken 2026-09-25 (first implementation)
+
+For the cold-aquaplanet (`aqua_ice`) target, decided with the user:
+
+- **O1/O2 — path:** in-place `.r.` edit + **continuation**. Only `cice.r` is
+  edited, and only `vicen`/`eicen` (ice volume and enthalpy, same factor).
+  `aicen`, `Tsfcn` and hence ice fraction, surface temperature and albedo are
+  unchanged, so the coupler snapshot in `cpl.r`/`cam.rs` stays consistent
+  with the ice state — this largely defuses O2 for this target. Tier-2 A/B
+  against hybrid remains available if a continuation shows shocks.
+- **O6 — file discipline:** in place with a pristine backup
+  (`<file>.pre-accel.nc`). Re-running a jump re-reads the pristine copy, so
+  jumps never compound; `exocam-accelerate restore` puts it back. The jumped
+  file carries a JSON `exocam_accelerate` global attribute plus a sidecar
+  `<file>.accel.json` holding the full advice (the reference for the
+  post-jump check). rpointers are untouched.
+- **Fields:** ice only by default. The user flagged that the prototype's
+  choice of four fields was guess-and-check; snow (`vsnon`/`esnon`) can be
+  scaled with a separate `--snow-factor` for experiments. The Tier-0 sweep
+  found snow near equilibrium already.
+- **Jump sizing:** `docs/phase-space-extrapolation.md` "Ice growth is
+  Stefan-limited" — the ice factor comes from the conduction law
+  `N = a + b/hi`, targeting a chosen imbalance rather than N = 0.
+
+Still open: O3/O4 (only matter for hybrid), O5-residual, O7 (a frozen-regime
+restart set to check real `eicen`/`vicen` magnitudes — the first real jump
+will provide one), O8 (budget diagnostics in `cpl.r`, expected benign), and
+`somtp` / clm plugins.

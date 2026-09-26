@@ -14,8 +14,11 @@ dependencies = [
     "numpy>=1.22",
 ]
 
+[project.scripts]
+exocam-accelerate = "exocam_accelerate.cli:main"
+
 [project.optional-dependencies]
-# netCDF4 is only needed by the (future) restart-file layer, never by the
+# netCDF4 is only needed by the restart-file layer (restart.py), never by the
 # pure-computation core in trends/safeguards/schedule/stepper.
 netcdf = ["netCDF4"]
 dev = ["pytest>=7"]

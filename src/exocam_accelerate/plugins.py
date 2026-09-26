@@ -1,7 +1,8 @@
 """Variable-plugin interface for post-jump physical-constraint re-imposition.
 
-DESIGN ONLY — no plugin is implemented yet. Do not implement without the
-restart-integration decisions in docs/restart-integration-questions.md.
+Implemented plugins: ``aqua_ice`` (``aqua_ice.py``), for the in-place
+continuation path decided 2026-09-25 (docs/restart-integration-questions.md
+§7). Other targets (somtp, clm) remain design-only.
 
 Safeguard 5 of the design: after an extrapolation jump, each accelerated
 variable must have its physical constraints re-imposed. This is the only
