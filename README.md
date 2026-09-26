@@ -92,7 +92,7 @@ This is Tier 0 of a five-tier test plan (`docs/restart-integration-questions.md`
 experiment. It consumes `exocam-trend` text output via `trend_io`; the batch
 driver that generates that output lives in the `exocam-trend` repo.
 
-## Jumping a cold aquaplanet case (`advise` → `jump` → continue)
+## Jumping a cold aquaplanet case (in-flight production runs)
 
 For cold/waterbelt aquaplanets whose slow drift is sea-ice growth. The TOA
 deficit `N` is conducted through the ice and freezes onto it, so
@@ -102,30 +102,63 @@ says produces it, by scaling ice volume and enthalpy (`vicen`, `eicen`) in
 `cice.r` by one factor. Ice area, surface temperature and albedo are left
 alone, so the run resumes as a plain continuation.
 
-```bash
-# 1. on the HPC, in exocam-trend: trend series for the case (native + int2)
-./run_trend_batch.sh --cam --cice --nmonths <N> --int1 1 --int2 10 \
-    --outdir <trend_dir> <case>
+The workflow is built for babysitting a few production runs at a time: every
+step that touches a case happens at a segment boundary with no job queued,
+every jump can be undone, and the post-jump verdict is one command.
 
-# 2. anywhere: recommendation (prints the ice factor, expected N and TS after
-#    the jump, and model years skipped; refuses when the fit can't be trusted)
+**Stage 0 — shadow (all cases, no risk).** At each segment boundary run
+`advise` and keep the JSON. Only cases whose advice is stable across segments
+are candidates.
+
+**Stage 1 — one canary** (ideally a branch clone of a production case), jumped
+at a gentle factor (`--max-ice-factor 1.2`), run a short segment, `check`.
+
+**Stage 2 — production, one case in its watch window at a time:**
+
+```bash
+# on the HPC, per case, at a segment boundary
+./run_trend_batch.sh --cam --cice ... <case>             # exocam-trend: fresh series
 exocam-accelerate advise <trend_dir> <case> --json advice.json
 
-# 3. on the HPC, with the case stopped: apply it (dry run first)
-exocam-accelerate jump --rundir <rundir> --advice advice.json --dry-run
-exocam-accelerate jump --rundir <rundir> --advice advice.json
+# stop the chain first: no job for the case may be queued or running
+exocam-accelerate jump --rundir <rundir> --advice advice.json \
+    --archive <DOUT_S_ROOT> --dry-run                     # pre-flight + preview
+exocam-accelerate jump --rundir <rundir> --advice advice.json --archive <DOUT_S_ROOT>
 
-# 4. resubmit as a continuation (CONTINUE_RUN=TRUE). After a few years, N should
-#    settle near the advice's N_after. If it does not, undo:
-exocam-accelerate restore --rundir <rundir>
+# resubmit a SHORT continuation segment (e.g. STOP_N=5 years), regenerate
+# trends when it ends, then:
+exocam-accelerate check <trend_dir> <case> --rundir <rundir>
+#   exit 0  PASS  -> resume normal segments
+#   exit 10 WAIT  -> another short segment, check again
+#   exit 20 FAIL  -> roll back and resubmit:
+exocam-accelerate rollback --rundir <rundir> --archive <DOUT_S_ROOT>
 ```
 
-`jump` edits the `cice.r` that `rpointer.ice` names, keeps a pristine
-`*.pre-accel.nc` copy (re-running a jump starts from it, so jumps never
-compound), and writes the advice alongside as `*.accel.json`. Defaults:
-remove half the current imbalance (`--n-fraction 0.5`), ice factor capped at
-1.5 (`--max-ice-factor`); hard bound 2.0 whatever the flags say. Snow is left
-alone unless `--snow-factor` is given.
+`jump` refuses (exit 3) unless: no SLURM job named after the case is queued or
+running; every `rpointer.*` points at the restart being edited; no history in
+the run directory is past that date; the archived restart set for that date
+exists and is pristine; the advice is for this case and at most 5 years old.
+It keeps the pristine `cice.r` and the jump log in `run/exocam_accelerate/`
+(not next to the restart — CESM's `st_archive` sweeps `${CASE}.cice.r.*`).
+
+`check` scores the post-jump run against the relations the advice was fitted
+on, evaluated at the ice the run actually has: the jump landed (first
+post-jump `hi` ≈ expected), `N` sits on the conduction law, `TS` on its linear
+`TS(N)` relation, and the ice is not melting back — after 2 adjustment years,
+PASS needs 3 settled years. On null jumps in the 15 grp3 runs it false-alarms
+in ~1 % outside pt10 (whose own regime shifts it flags).
+
+`rollback` restores the archived restart set for the jump date (all
+components and rpointers — the run directory copy was the one edited), saves
+the current rpointers, and lists the discarded segment's output without
+deleting it: move that aside before any trend analysis.
+
+The next `advise` detects the jump (a one-year step in `hi`) and fits
+post-jump native annual means only; it needs 2 + 15 settled years after a jump,
+so one cycle is ~20 model years for ~180 skipped. Defaults: remove half the
+current imbalance (`--n-fraction 0.5`), target clipped to 5x the window's
+N-range, ice factor capped at 1.5 (`--max-ice-factor`); hard bound 2.0 whatever
+the flags say. Snow is left alone unless `--snow-factor` is given.
 
 ## Related tools
 
@@ -147,10 +180,10 @@ pytest
 
 Experimental. Pure-computation safeguards, the Tier-0 offline hindcast
 harness, the phase-space jump advisor, and the `aqua_ice` restart writer
-(cice.r, in place with backup, continuation) are implemented and tested (115
-unit tests). The advisor is validated offline on 15 cold cases; the first real
-jumps are the Tier-1/2 test of the restart path. Run orchestration, the
-consistency-check hook, and ocean (`somtp`) / land plugins are not
-implemented.
+(cice.r, in place with backup, continuation), the post-jump `check`, pre-flight
+safety checks and whole-set `rollback` are implemented and tested (152 unit
+tests). The advisor is validated offline on 15 cold cases; the first real
+jumps are the Tier-1/2 test of the restart path. Run orchestration (submitting
+and polling segments) and ocean (`somtp`) / land plugins are not implemented.
 
 **Use with care and caution — model behavior is not always straightforward.**

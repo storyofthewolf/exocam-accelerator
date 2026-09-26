@@ -1,0 +1,316 @@
+"""Run-directory safety: pre-flight checks before a jump, and whole-set rollback.
+
+No netCDF needed except to confirm an archived cice.r is pristine (optional).
+
+Facts about CESM 1.2.1 this relies on (scripts/ccsm_utils/Tools/st_archive.sh):
+* At the end of every successful segment st_archive moves the newest restart
+  of each component, plus all rpointer.* files, into
+  ``$DOUT_S_ROOT/rest/<date>/`` and then copies that whole directory back into
+  the run directory. The run directory's restart files are therefore copies:
+  a jump edits the copy, and the archived set stays pristine — it is the
+  rollback source.
+* Older restart files are deleted (or moved to ``<comp>/rest``) from the run
+  directory at the next archive, so after the post-jump segment the run
+  directory alone can no longer undo a jump when DOUT_S is on.
+
+The SLURM probe mirrors exocam-casemgr's (job name == case name, one
+``squeue --me`` snapshot); it is re-implemented here, not imported.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, List, Optional, Set, Tuple
+
+from .restart import (
+    DATE_RE,
+    STATE_DIR,
+    backup_path,
+    case_of,
+    find_jump_logs,
+    first_model_year,
+    is_jumped,
+    log_path,
+    restart_date,
+    restore,
+)
+
+_HIST_RE = re.compile(r"\.(\d{4})-(\d{2})(?:-\d{2}(?:-\d{5})?)?\.nc$")
+
+
+def active_jobs() -> Optional[Set[str]]:
+    """Names of the user's queued/running SLURM jobs; None if squeue is unusable."""
+    try:
+        res = subprocess.run(["squeue", "--me", "-h", "-o", "%j"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    return {line.strip() for line in res.stdout.splitlines() if line.strip()}
+
+
+JobProbe = Callable[[], Optional[Set[str]]]
+
+
+@dataclass(frozen=True)
+class Finding:
+    level: str            # "ok" | "warn" | "block"
+    message: str
+
+
+def blocked(findings) -> bool:
+    return any(f.level == "block" for f in findings)
+
+
+def _job_finding(case: str, probe: Optional[JobProbe]) -> Finding:
+    if probe is None:
+        return Finding("warn", "SLURM check skipped (--skip-slurm-check): you have "
+                               "confirmed the case is not queued or running")
+    jobs = probe()
+    if jobs is None:
+        return Finding("block", "squeue unavailable: cannot confirm the case is not "
+                                "queued or running (pass --skip-slurm-check only "
+                                "after confirming it yourself)")
+    if case in jobs:
+        return Finding("block", f"a SLURM job named {case} is queued or running: "
+                                f"stop the chain (or wait for the segment to end) "
+                                f"before editing its restart files")
+    return Finding("ok", f"no queued or running job named {case}")
+
+
+def _ym(date: str) -> Tuple[int, int]:
+    y, m, _, _ = DATE_RE.fullmatch(date).groups()
+    return int(y), int(m)
+
+
+def _hist_ym(name: str) -> Optional[Tuple[int, int]]:
+    m = _HIST_RE.search(name)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _rpointer_dates(rundir: Path) -> dict:
+    out = {}
+    for rp in sorted(rundir.glob("rpointer.*")):
+        lines = [l.strip() for l in rp.read_text().splitlines() if l.strip()]
+        m = DATE_RE.search(lines[0]) if lines else None
+        out[rp.name] = "-".join(m.groups()) if m else None
+    return out
+
+
+def preflight(cice_r, archive: Optional[Path] = None,
+              probe: Optional[JobProbe] = active_jobs,
+              advice: Optional[dict] = None) -> List[Finding]:
+    """Checks before editing ``cice_r`` in place. Any "block" finding refuses.
+
+    ``archive`` is the case's short-term archive root (DOUT_S_ROOT, i.e. the
+    directory holding ``rest/``). ``probe`` = None skips the SLURM check.
+    """
+    cice_r = Path(cice_r).resolve()
+    rundir = cice_r.parent
+    case = case_of(cice_r)
+    date = restart_date(cice_r)
+    out: List[Finding] = [_job_finding(case, probe)]
+
+    # every component restarts from the same date as the file we edit
+    dates = _rpointer_dates(rundir)
+    wrong = {k: v for k, v in dates.items() if v != date}
+    if not dates:
+        out.append(Finding("block", f"no rpointer.* files in {rundir}"))
+    elif wrong:
+        out.append(Finding("block", f"rpointer files disagree with {cice_r.name} "
+                                    f"({date}): {wrong} — stale or mixed pointers"))
+    else:
+        out.append(Finding("ok", f"all {len(dates)} rpointer files point at {date}"))
+
+    # run directory must not hold output from beyond this restart
+    h0 = [(_hist_ym(p.name), p.name) for p in rundir.glob(f"{case}.cam.h0.*.nc")]
+    h0 = [x for x in h0 if x[0] is not None]
+    if not h0:
+        out.append(Finding("warn", "no cam.h0 files in the run directory (archived?): "
+                                   "could not cross-check how far the run has got"))
+    else:
+        newest = max(h0)
+        if newest[0] >= _ym(date):
+            out.append(Finding("block", f"{newest[1]} is at or past the restart date "
+                                        f"{date}: the run has moved on and the "
+                                        f"rpointers are stale"))
+        else:
+            out.append(Finding("ok", f"newest history {newest[1]} precedes the restart"))
+
+    # the archived set is the rollback source
+    if archive is None:
+        out.append(Finding("warn", "no --archive given: cannot confirm a pristine "
+                                   "archived restart set exists for rollback"))
+    else:
+        rest = Path(archive) / "rest" / date
+        if not (rest / cice_r.name).is_file():
+            out.append(Finding("block", f"no archived restart set with {cice_r.name} "
+                                        f"in {rest}: rollback after the next segment "
+                                        f"would be impossible"))
+        else:
+            try:
+                jumped = is_jumped(rest / cice_r.name)
+            except ImportError:
+                jumped = False
+            if jumped:
+                out.append(Finding("block", f"the archived {cice_r.name} is itself "
+                                            f"jumped — it is not a pristine rollback copy"))
+            else:
+                out.append(Finding("ok", f"pristine archived restart set at {rest}"))
+
+    # the advice must describe this case at (about) this date
+    if advice is not None:
+        if advice.get("case") and advice["case"] != case:
+            out.append(Finding("block", f"advice is for {advice['case']!r}, the "
+                                        f"restart is {case!r}"))
+        yr = advice.get("model_year")
+        if yr is not None:
+            gap = first_model_year(date) - 1 - int(yr)
+            if gap > 5:
+                out.append(Finding("block", f"advice uses data through model year "
+                                            f"{yr} but the restart is {date}: "
+                                            f"{gap} years stale — re-run advise"))
+            elif gap > 0:
+                out.append(Finding("warn", f"advice is {gap} year(s) older than the "
+                                           f"restart; fine for the factor, the landing "
+                                           f"check allows for it"))
+            elif gap < 0:
+                out.append(Finding("block", f"advice uses data through model year {yr}, "
+                                            f"after this restart ({date})"))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# rollback
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RollbackPlan:
+    rundir: Path
+    case: str
+    date: str
+    source: str                          # "archive" | "rundir"
+    findings: List[Finding] = field(default_factory=list)
+    actions: List[str] = field(default_factory=list)
+    discarded: List[str] = field(default_factory=list)
+    executed: bool = False
+
+
+def select_jump_log(rundir: Path, date: Optional[str]) -> Path:
+    logs = find_jump_logs(rundir)
+    if date:
+        logs = [p for p in logs if date in p.name]
+    if not logs:
+        raise FileNotFoundError(f"no active jump log in {rundir / STATE_DIR}"
+                                + (f" for {date}" if date else ""))
+    if len(logs) > 1:
+        raise ValueError(f"several active jump logs, pass --date: "
+                         f"{[p.name for p in logs]}")
+    return logs[0]
+
+
+def _after(name: str, date: str) -> bool:
+    """Output produced by the discarded segment: restarts dated after the jump,
+    history for months at or after it."""
+    m = DATE_RE.findall(name)
+    if m:
+        return "-".join(m[-1]) > date
+    ym = _hist_ym(name)
+    return ym is not None and ym >= _ym(date)
+
+
+def plan_rollback(rundir, archive: Optional[Path] = None, date: Optional[str] = None,
+                  probe: Optional[JobProbe] = active_jobs) -> RollbackPlan:
+    """Plan resetting a case to its pre-jump restart set (nothing is changed)."""
+    rundir = Path(rundir).resolve()
+    log = select_jump_log(rundir, date)
+    meta = json.loads(log.read_text())
+    date, case = meta["restart_date"], meta["case"]
+    cice = rundir / meta["restart_file"]
+    rest = Path(archive) / "rest" / date if archive is not None else None
+    use_archive = rest is not None and rest.is_dir()
+    plan = RollbackPlan(rundir, case, date, "archive" if use_archive else "rundir")
+    plan.findings.append(_job_finding(case, probe))
+
+    if use_archive:
+        files = sorted(p for p in rest.iterdir() if p.is_file())
+        arch_cice = rest / cice.name
+        if not arch_cice.is_file():
+            plan.findings.append(Finding("block", f"{rest} has no {cice.name}"))
+        else:
+            try:
+                if is_jumped(arch_cice):
+                    plan.findings.append(Finding("block", f"archived {cice.name} is "
+                                                          f"jumped, not pristine"))
+            except ImportError:
+                plan.findings.append(Finding("warn", "netCDF4 unavailable: archived "
+                                                     "cice.r not verified pristine"))
+        plan.actions.append(f"save current rpointer.* to {STATE_DIR}/rollback-{date}/")
+        plan.actions += [f"copy {rest.name}/{p.name} -> run/{p.name}" for p in files]
+    else:
+        if archive is not None:
+            plan.findings.append(Finding("warn", f"no archived set {rest}; rolling "
+                                                 f"back from the run directory"))
+        if not backup_path(cice).exists():
+            plan.findings.append(Finding("block", f"no pristine backup "
+                                                  f"{backup_path(cice)} and no archived "
+                                                  f"set: cannot roll back cice.r"))
+        plan.actions.append(f"save current rpointer.* to {STATE_DIR}/rollback-{date}/")
+        for rp in sorted(rundir.glob("rpointer.*")):
+            text = rp.read_text()
+            new = DATE_RE.sub(date, text)
+            for line in new.splitlines():
+                name = line.strip().lstrip("./").strip()
+                if not name or name.startswith("#"):
+                    continue
+                if not (rundir / name).is_file():
+                    plan.findings.append(Finding("block", f"{rp.name} would name "
+                                                          f"{name}, missing from the "
+                                                          f"run directory (archived "
+                                                          f"away? pass --archive)"))
+            if new != text:
+                plan.actions.append(f"rewrite {rp.name} to {date}")
+        plan.actions.append(f"restore {cice.name} from its pristine backup")
+    plan.actions.append(f"retire jump log {log.name} (-> .rolledback.json)")
+
+    for p in sorted(rundir.iterdir()):
+        if p.is_file() and p.name.startswith(case + ".") and _after(p.name, date):
+            plan.discarded.append(str(p))
+    if archive is not None:
+        for p in sorted(Path(archive).glob("*/hist/*")):
+            if p.name.startswith(case + ".") and _after(p.name, date):
+                plan.discarded.append(str(p))
+    return plan
+
+
+def execute_rollback(plan: RollbackPlan, archive: Optional[Path] = None) -> RollbackPlan:
+    if blocked(plan.findings):
+        raise RuntimeError("rollback plan has blocking findings")
+    rundir = plan.rundir
+    save = rundir / STATE_DIR / f"rollback-{plan.date}"
+    save.mkdir(parents=True, exist_ok=True)
+    for rp in rundir.glob("rpointer.*"):
+        shutil.copy2(rp, save / rp.name)
+
+    log = select_jump_log(rundir, plan.date)
+    meta = json.loads(log.read_text())
+    cice = rundir / meta["restart_file"]
+    if plan.source == "archive":
+        rest = Path(archive) / "rest" / plan.date
+        for p in rest.iterdir():
+            if p.is_file():
+                shutil.copy2(p, rundir / p.name)
+        log.rename(log.with_name(log.name[: -len(".json")] + ".rolledback.json"))
+    else:
+        for rp in rundir.glob("rpointer.*"):
+            rp.write_text(DATE_RE.sub(plan.date, rp.read_text()))
+        restore(cice, retire_log="rolledback")
+    plan.executed = True
+    return plan

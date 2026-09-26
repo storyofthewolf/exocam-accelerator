@@ -1,33 +1,9 @@
 import numpy as np
 import pytest
 
-from exocam_accelerate.advise import AdvisorConfig, advise
+from synth import stefan_columns, truncate
 
-
-def stefan_columns(years=100, a=0.1, b=-70.0, h0=15.0, k=6.0,
-                   icefrac=0.8, icefrac_drift=0.0):
-    """Synthetic trend columns obeying conduction-limited ice growth.
-
-    hi(t) = sqrt(h0^2 + 2 k t),  N = a + b/hi,  TS linear in N,  qi ∝ hi.
-    int2 is set equal to native (smoothing is not under test here).
-    """
-    month = np.arange(1, 12 * years + 1, dtype=float)
-    t = month / 12.0
-    hi = np.sqrt(h0**2 + 2 * k * t)
-    N = a + b / hi
-    series = {
-        "hi": hi,
-        "energy_top": N,
-        "TS": 210.0 + 1.5 * N,
-        "Tsfc": -60.0 + 1.5 * N,
-        "qi": -3.0e20 * hi,
-        "ICEFRAC": icefrac + icefrac_drift * t / years,
-    }
-    cols = {"month": month}
-    for name, v in series.items():
-        cols[f"{name}_native"] = v
-        cols[f"{name}_int2"] = v
-    return cols
+from exocam_accelerate.advise import AdvisorConfig, advise, detect_jumps
 
 
 def test_recommends_factor_from_conduction_law():
@@ -93,3 +69,42 @@ def test_to_dict_is_json_serialisable():
     d = json.loads(json.dumps(adv.to_dict()))
     assert d["ice_factor"] == pytest.approx(adv.ice_factor)
     assert "TS" in d["expected_after_jump"]
+
+
+def test_model_years_from_start_year():
+    adv = advise(stefan_columns(years=50), "synth", start_year=101)
+    assert adv.model_year == 150
+
+
+class TestAfterAJump:
+    def test_detects_jump_not_spinup(self):
+        years = list(range(1, 101))
+        cols = stefan_columns(h0=1.0, jump_year=61, factor=1.5)
+        from exocam_accelerate.advise import _annual
+        _, h = _annual(cols, "hi", "native")
+        # early growth is >8 %/yr for years but is not a jump
+        assert detect_jumps(years, h) == [61]
+
+    def test_refuses_until_enough_post_jump_years(self):
+        cols = stefan_columns(years=70, jump_year=61, factor=1.5)
+        adv = advise(cols, "synth")
+        assert adv.since_year == 61
+        assert not adv.jump
+        assert any("settled years since the jump" in r for r in adv.reasons)
+        assert any("detected a jump" in w for w in adv.warnings)
+
+    def test_fits_post_jump_native_data(self):
+        cols = stefan_columns(years=61 + 2 + 20, jump_year=61, factor=1.5)
+        adv = advise(cols, "synth")
+        assert adv.jump, adv.reasons
+        assert adv.which_used == "native"
+        assert adv.window_years == 21      # every settled post-jump year
+        a, b = adv.ice.fits["hyperbolic"].params
+        assert b == pytest.approx(-70.0, rel=1e-2)
+
+    def test_explicit_since(self):
+        cols = stefan_columns(years=90)
+        adv = advise(cols, "synth", AdvisorConfig(since_year=60))
+        assert adv.since_year == 60
+        assert adv.which_used == "native"
+        assert adv.jump, adv.reasons

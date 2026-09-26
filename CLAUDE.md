@@ -39,7 +39,11 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   (`vicen`+`eicen`, one factor; `aicen` untouched) with a pristine
   `.pre-accel.nc` backup, then a plain continuation. Jump size comes from the
   Stefan conduction law `N = a + b/hi` (phase-space, target a chosen N, not
-  N=0) — `advise.py`, `aqua_ice.py`, `restart.py`, `cli.py`. See
+  N=0) — `advise.py`, `aqua_ice.py`, `restart.py`, `cli.py`. In-flight
+  production safety (2026-09-26): pre-flight, `check`, `rollback` from the
+  archived restart set (`runstate.py`, `check.py`); bookkeeping lives in
+  `run/exocam_accelerate/` because CESM's st_archive sweeps
+  `${CASE}.cice.r.*` in the run directory. See
   `docs/restart-integration-questions.md` §7 and
   `docs/phase-space-extrapolation.md`.
 
@@ -48,8 +52,6 @@ a bare multiplicative factor to restart fields with none of the safeguards).
 - **Other restart paths/targets.** Hybrid reboot (`.i.` files), `somtp`
   (docn.r) and clm plugins, atmosphere fields. Remaining questions (O3–O8)
   are in `docs/restart-integration-questions.md`.
-- The consistency-check implementation (the advice JSON's `N_after` / TS
-  reference is its intended input).
 - Run orchestration (submitting/monitoring the forward runs between jumps).
 - Turbet-style in-situ radiative heating-rate multiplication
   (`(P/Plim)^α`, α: 0.5 → 0.3 → 0) is **deferred indefinitely** — it requires
@@ -85,9 +87,11 @@ src/exocam_accelerate/
   advise.py       jump advisor: trend columns -> ice factor, N_after, TS reference
   plugins.py      VariablePlugin interface + registry
   aqua_ice.py     aqua_ice plugin (scale vicen/eicen, constraint pass)
-  restart.py      netCDF layer: cice.r in-place jump with backup, restore
-  cli.py          `exocam-accelerate advise|jump|restore`
-  consistency.py  ConsistencyCheck interface (design only — NotImplementedError)
+  restart.py      netCDF layer: cice.r in-place jump, backup/log in run/exocam_accelerate/
+  runstate.py     pre-flight (SLURM, rpointers, archive) and whole-set rollback
+  check.py        post-jump verdict PASS/WAIT/FAIL (the consistency check for aqua_ice)
+  cli.py          `exocam-accelerate advise|jump|check|rollback|restore`
+  consistency.py  generic ConsistencyCheck interface (design only; check.py is the aqua_ice one)
 tests/            pytest unit tests for everything implemented
 docs/restart-integration-questions.md   task-4 findings + open user decisions
 ```

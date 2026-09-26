@@ -16,6 +16,7 @@ exocam-trend grows that capability.
 from __future__ import annotations
 
 import glob
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -73,6 +74,26 @@ def trend_series(columns: Dict[str, np.ndarray], variable: str,
         months = months[-last_n_months:]
         values = values[-last_n_months:]
     return TrendSeries(times=months / MONTHS_PER_YEAR, values=values)
+
+
+_SPAN = re.compile(r"_(\d{4})-(\d{2})-(\d{4})-(\d{2})_(?:cam|cice|clm)\.txt$")
+
+
+def case_start_year(directory, case_id: str) -> int:
+    """Model year of the first month in a case's exocam-trend files.
+
+    Parsed from the ``<case>_<YYYY>-<MM>-<YYYY>-<MM>_<comp>.txt`` file name.
+    Annual means are binned from the series' first month, so they align with
+    model years only when the series starts in January; anything else raises.
+    """
+    for path in sorted(Path(directory).glob(f"{case_id}_*.txt")):
+        m = _SPAN.search(path.name)
+        if m:
+            if m.group(2) != "01":
+                raise ValueError(f"{path.name}: series starts in month {m.group(2)}; "
+                                 f"annual means need a January start")
+            return int(m.group(1))
+    raise FileNotFoundError(f"no exocam-trend files for {case_id} in {directory}")
 
 
 def load_case(directory, case_id: str) -> Dict[str, np.ndarray]:

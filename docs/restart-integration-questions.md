@@ -332,3 +332,24 @@ Still open: O3/O4 (only matter for hybrid), O5-residual, O7 (a frozen-regime
 restart set to check real `eicen`/`vicen` magnitudes — the first real jump
 will provide one), O8 (budget diagnostics in `cpl.r`, expected benign), and
 `somtp` / clm plugins.
+
+### 7a. In-flight production safety (2026-09-26)
+
+From CESM 1.2.1 `scripts/ccsm_utils/Tools/st_archive.sh` (read-only):
+
+- At the end of each successful segment it moves the newest restart of every
+  component plus all `rpointer.*` into `$DOUT_S_ROOT/rest/<date>/`, then
+  `cp`s that directory back into the run directory. The run-directory restart
+  a jump edits is therefore a **copy**; the archived set stays pristine and is
+  the rollback source.
+- Older restarts are deleted from the run directory at the next archive
+  (`DOUT_S_SAVE_INT_REST_FILES=FALSE`), and the match is
+  `${CASE}.cice.r.[0-9]*` — which would also have swept a backup or log named
+  after the restart. Hence `run/exocam_accelerate/` (st_archive never
+  descends into subdirectories).
+- With DOUT_S off nothing is archived and old sets stay in the run directory;
+  `rollback` then rewrites the rpointer dates and restores `cice.r` from the
+  pristine backup.
+
+O6 is therefore settled as: in-place edit of the run-directory copy, pristine
+backup + jump log in `run/exocam_accelerate/`, rollback from the archive.

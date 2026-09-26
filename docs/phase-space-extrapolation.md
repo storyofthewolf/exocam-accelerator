@@ -218,3 +218,32 @@ are — lets the model continue along it. That is the Tier-1/Tier-2 test
 (restart-integration doc §6b), and the first real jumps are that test: after
 the continuation, N should settle near the advice's `N_after` within a few
 years.
+
+## After a jump: advising again, and the post-jump check (2026-09-26)
+
+**Advising again.** The int2 column is a 10-yr trailing mean, so for a decade
+after a jump it straddles two states. `advise` detects a jump as a one-year
+step in `hi` that stands out from its neighbours' growth (early spin-up grows
+>8 %/yr for years and is not flagged), then fits only native annual means from
+2 years after the jump. Hindcast (native annual means, hyperbolic fit, origins
+yr 40–120): at |corr| ≥ 0.7 a 20-yr window gives median / p90 relative `hi`
+error 2.7 % / 7.4 % — int2 accuracy — while 10-yr windows are noisy (7 % / 16 %).
+Hence ≥ 15 settled post-jump years before the next jump. Late in a run the
+window's N-range is small, so the target is clipped to 5x that range rather
+than refused: later jumps come out smaller, the phase-space form of a
+decreasing Δt schedule.
+
+The ice-edge gate compares 3-yr means at the window's ends. A trend-based
+version was tried and rejected: it passed windows reaching back into the
+initial transient (yr ~10), which doubled the p90 `N_after` error
+(1.09 vs 0.34 W/m²) in the end-to-end hindcast.
+
+**The check** (`check.py`) scores the post-jump run against the advice's own
+relations at the ice the run actually has, relative to the run's offset from
+them over the 5 pre-jump years. Null-jump test (factor 1 at yr 40–130 on all
+15 runs, `../scratch/check_falsealarm.py`): FAIL in 3/130 at 5 yr and 4/130 at
+8 yr, all but one in pt10 — the full snowball, whose TS shifts by 1–2 K on its
+own around yr 80–100 (flagging it is the conservative outcome). Sensitivity: a
+jump the model rejects leaves N near its pre-jump value, N_now/3 away from
+the law at a 1.5 factor, so a rejected jump is reliably caught when
+|N_now| ≳ 1.2 W/m²; below that it is within the 0.4 W/m² noise floor.
