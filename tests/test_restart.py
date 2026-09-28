@@ -6,6 +6,7 @@ import pytest
 netCDF4 = pytest.importorskip("netCDF4")
 
 from exocam_accelerate import restart  # noqa: E402
+from exocam_accelerate.advise import ADVICE_SCHEMA_VERSION  # noqa: E402
 from exocam_accelerate.cli import main  # noqa: E402
 
 CASE = "case"
@@ -131,9 +132,10 @@ def test_cli_jump_from_advice(rundir, tmp_path):
     path = rundir / NAME
     v0 = read(path, "vicen")
     advice = tmp_path / "advice.json"
-    advice.write_text(json.dumps({"case": CASE, "ice_factor": 1.3, "model_year": 100}))
+    advice.write_text(json.dumps({"case": CASE, "ice_factor": 1.3, "model_year": 100,
+                                  "schema_version": ADVICE_SCHEMA_VERSION}))
     assert main(["jump", "--rundir", str(rundir), "--advice", str(advice),
-                 "--skip-slurm-check", "--yes"]) == 0
+                 "--allow-no-archive-rollback", "--skip-slurm-check", "--yes"]) == 0
     np.testing.assert_allclose(read(path, "vicen"), 1.3 * v0)
     assert main(["restore", "--rundir", str(rundir)]) == 0
     np.testing.assert_array_equal(read(path, "vicen"), v0)
@@ -157,4 +159,4 @@ def test_cli_refuses_no_jump_advice(rundir, tmp_path):
 
 def test_cli_hard_bound(rundir):
     assert main(["jump", "--rundir", str(rundir), "--ice-factor", "3",
-                 "--skip-slurm-check", "--yes"]) == 2
+                 "--allow-no-archive-rollback", "--skip-slurm-check", "--yes"]) == 2

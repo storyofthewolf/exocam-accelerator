@@ -136,17 +136,35 @@ exocam-accelerate rollback --rundir <rundir> --archive <DOUT_S_ROOT>
 
 `jump` refuses (exit 3) unless: no SLURM job named after the case is queued or
 running; every `rpointer.*` points at the restart being edited; no history in
-the run directory is past that date; the archived restart set for that date
-exists and is pristine; the advice is for this case and at most 5 years old.
-It keeps the pristine `cice.r` and the jump log in `run/exocam_accelerate/`
-(not next to the restart — CESM's `st_archive` sweeps `${CASE}.cice.r.*`).
+the run directory is past that date; a verified rollback source exists — the
+archived restart set for that date, pristine, via `--archive` (mandatory; the
+only escape hatch is `--allow-no-archive-rollback`, which instead verifies
+every `rpointer.*`-named component restart is still present in the run
+directory, and is only a valid rollback source until the next `st_archive`
+sweep); and the advice is bound to this jump — a known `schema_version`, the
+same case, and at most 5 years old. It keeps the pristine `cice.r` and the
+jump log in `run/exocam_accelerate/` (not next to the restart — CESM's
+`st_archive` sweeps `${CASE}.cice.r.*`).
+
+`advise` refuses (no ice factor; reasons explain why) rather than merely
+warning when a diagnostic needed to trust the jump is missing or fails its
+gate: no `ICEFRAC` series (settled-edge check), no `qi` series or `qi`/`hi`
+drifting more than `--max-enthalpy-drift`, a rejected `TS(N)`/`Tsfc(N)`
+reference, or an explicit `--n-target` that does not lie strictly between the
+current imbalance and the fitted asymptote. Saved advice JSON carries a
+`schema_version` and a `provenance` map (input trend file name → sha256),
+binding it to the exact series it was fit from.
 
 `check` scores the post-jump run against the relations the advice was fitted
 on, evaluated at the ice the run actually has: the jump landed (first
 post-jump `hi` ≈ expected), `N` sits on the conduction law, `TS` on its linear
 `TS(N)` relation, and the ice is not melting back — after 2 adjustment years,
-PASS needs 3 settled years. On null jumps in the 15 grp3 runs it false-alarms
-in ~1 % outside pt10 (whose own regime shifts it flags).
+PASS needs 3 settled years. If the jump log's `TS(N)` reference is missing or
+was not accepted by the advisor, `check` cannot PASS under the standard
+`aqua_ice` protocol — once enough settled years have accumulated it returns
+FAIL (not WAIT: no amount of additional settled data fixes a reference that
+was never accepted). On null jumps in the 15 grp3 runs it false-alarms in
+~1 % outside pt10 (whose own regime shifts it flags).
 
 `rollback` restores the archived restart set for the jump date (all
 components and rpointers — the run directory copy was the one edited), saves

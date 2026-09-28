@@ -1,7 +1,9 @@
+import hashlib
+
 import numpy as np
 import pytest
 
-from exocam_accelerate.trend_io import load_case, read_trend_text, trend_series
+from exocam_accelerate.trend_io import file_provenance, load_case, read_trend_text, trend_series
 
 # Matches the documented exocam-trend data/*.txt format:
 # month  VAR_native  VAR_int1  VAR_int2 ... per variable
@@ -68,13 +70,14 @@ CICE_FIXTURE = """month  hi_native  hi_int1  hi_int2  vicen005_native  vicen005_
 """
 
 
-class TestLoadCase:
-    @pytest.fixture
-    def case_dir(self, tmp_path):
-        (tmp_path / "coldA_0001-01-0150-12_cam.txt").write_text(CAM_FIXTURE)
-        (tmp_path / "coldA_0001-01-0150-12_cice.txt").write_text(CICE_FIXTURE)
-        return tmp_path
+@pytest.fixture
+def case_dir(tmp_path):
+    (tmp_path / "coldA_0001-01-0150-12_cam.txt").write_text(CAM_FIXTURE)
+    (tmp_path / "coldA_0001-01-0150-12_cice.txt").write_text(CICE_FIXTURE)
+    return tmp_path
 
+
+class TestLoadCase:
     def test_merges_components_under_one_month_axis(self, case_dir):
         cols = load_case(case_dir, "coldA")
         # atmosphere TS and sea-ice hi/vicen live together after merge
@@ -97,3 +100,15 @@ class TestLoadCase:
         )  # only one month -> axis differs
         with pytest.raises(ValueError):
             load_case(tmp_path, "b")
+
+
+class TestFileProvenance:
+    def test_hashes_every_component_file(self, case_dir):
+        prov = file_provenance(case_dir, "coldA")
+        assert set(prov) == {"coldA_0001-01-0150-12_cam.txt",
+                             "coldA_0001-01-0150-12_cice.txt"}
+        assert prov["coldA_0001-01-0150-12_cam.txt"] == hashlib.sha256(
+            CAM_FIXTURE.encode()).hexdigest()
+
+    def test_no_files_is_empty(self, tmp_path):
+        assert file_provenance(tmp_path, "nope") == {}

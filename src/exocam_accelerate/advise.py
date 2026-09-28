@@ -48,6 +48,12 @@ ICE_ENTHALPY_VAR = "qi"
 ICE_AREA_VAR = "ICEFRAC"
 TEMPERATURE_VARS = ("TS", "Tsfc")
 
+#: Version of the serialized ``Advice.to_dict()`` shape. Bump this whenever a
+#: field is added, removed, or reinterpreted; ``runstate.preflight`` refuses
+#: advice whose ``schema_version`` is missing or not in
+#: ``runstate.KNOWN_ADVICE_SCHEMA_VERSIONS``.
+ADVICE_SCHEMA_VERSION = "1"
+
 
 @dataclass(frozen=True)
 class AdvisorConfig:
@@ -80,6 +86,31 @@ class AdvisorConfig:
     post_jump_gate: PhaseGateConfig = field(
         default_factory=lambda: PhaseGateConfig(min_abs_corr=0.7))
 
+    def __post_init__(self) -> None:
+        if not (0.0 < self.n_fraction < 1.0):
+            raise ValueError(f"n_fraction must satisfy 0 < n_fraction < 1, got "
+                             f"{self.n_fraction!r}")
+        if not (1.0 <= self.max_ice_factor <= 2.0):
+            raise ValueError(f"max_ice_factor must satisfy 1 <= max_ice_factor <= 2 "
+                             f"(a thickening-only cold-case jump), got "
+                             f"{self.max_ice_factor!r}")
+        if self.window_years is not None and self.window_years <= 0:
+            raise ValueError(f"window_years must be positive, got "
+                             f"{self.window_years!r}")
+        if any(w <= 0 for w in self.auto_windows):
+            raise ValueError(f"auto_windows entries must all be positive, got "
+                             f"{self.auto_windows!r}")
+        if self.settle_years <= 0:
+            raise ValueError(f"settle_years must be positive, got "
+                             f"{self.settle_years!r}")
+        if self.post_jump_min_years <= 0:
+            raise ValueError(f"post_jump_min_years must be positive, got "
+                             f"{self.post_jump_min_years!r}")
+        if self.max_icefrac_change < 0:
+            raise ValueError("max_icefrac_change must be non-negative")
+        if self.max_enthalpy_drift < 0:
+            raise ValueError("max_enthalpy_drift must be non-negative")
+
 
 @dataclass(frozen=True)
 class Advice:
@@ -102,6 +133,7 @@ class Advice:
     years_skipped: Optional[float]
     reasons: tuple                        # why no jump (empty when jumping)
     warnings: tuple
+    provenance: Optional[Dict[str, str]] = None  # input trend file -> sha256
 
     @property
     def jump(self) -> bool:
@@ -127,6 +159,7 @@ class Advice:
 
         c = self.config
         return {
+            "schema_version": ADVICE_SCHEMA_VERSION,
             "case": self.case,
             "model_year": self.model_year,
             "N_now": num(self.N_now),
@@ -152,6 +185,7 @@ class Advice:
             "warnings": list(self.warnings),
             "ice": ext(self.ice) if self.ice is not None else None,
             "temperatures": {v: ext(r) for v, r in self.temperatures.items()},
+            "provenance": dict(self.provenance) if self.provenance else None,
         }
 
 
@@ -207,12 +241,17 @@ def _icefrac_change(t, f, mask, edge_years: int = 3) -> float:
 
 def advise(columns: Dict[str, np.ndarray], case: str,
            config: AdvisorConfig = AdvisorConfig(),
-           start_year: int = 1) -> Advice:
+           start_year: int = 1,
+           provenance: Optional[Dict[str, str]] = None) -> Advice:
     """Build jump advice from merged exocam-trend columns (``load_case``).
 
     ``start_year`` is the model year of the trend series' first month
     (``trend_io.case_start_year``); it only matters for reporting and for
     ``since_year``, which is a model year.
+
+    ``provenance`` (e.g. ``trend_io.file_provenance(...)``) is recorded
+    verbatim in the advice so it can be audited later; it is not otherwise
+    used here.
     """
     t, N_nat = _annual(columns, config.imbalance, "native")
     years = model_years(t, start_year)
@@ -275,7 +314,7 @@ def advise(columns: Dict[str, np.ndarray], case: str,
         return Advice(case, model_year, N_now, float(N_now_fit), float(N_target),
                       config, which, float(window), since, tuple(detected), ice,
                       temps or {}, factor, raw, clipped, N_after, skipped,
-                      tuple(reasons), tuple(warnings))
+                      tuple(reasons), tuple(warnings), provenance)
 
     if not have_hi:
         reasons.append(f"no {ICE_VOLUME_VAR} series in the trend output")
@@ -301,6 +340,18 @@ def advise(columns: Dict[str, np.ndarray], case: str,
     N_now_fit = a + b / h_now
     if config.N_target is not None:
         N_target = float(config.N_target)
+        # An explicit target must advance toward equilibrium (the fitted
+        # asymptote a) without crossing or reversing past the current point:
+        # strictly between N_now_fit and a. The extrapolate() gate below
+        # separately refuses a target at/past the asymptote (X -> inf); this
+        # additionally catches a target on the correct side of the asymptote
+        # but the wrong side of N_now_fit (moving further from equilibrium).
+        lo_ok, hi_ok = sorted((N_now_fit, a))
+        if not (lo_ok < N_target < hi_ok):
+            reasons.append(f"explicit N_target {N_target:+.2f} does not lie strictly "
+                           f"between the current imbalance N_now_fit={N_now_fit:+.2f} "
+                           f"and the fitted asymptote a={a:+.2f}: refusing (would not "
+                           f"advance toward equilibrium without crossing/reversing)")
     else:
         N_target = N_now_fit * (1.0 - config.n_fraction)
     # Clip the target to the trusted extrapolation range (the phase-space
@@ -319,24 +370,37 @@ def advise(columns: Dict[str, np.ndarray], case: str,
                       "hyperbolic", gate)
     reasons.extend(ice.reasons)
 
-    if area is not None:
+    # Fail closed (feasibility-review finding 2): a missing ICEFRAC series
+    # means the settled-edge assumption behind the conduction law and the
+    # fixed-area vicen/eicen scaling cannot be confirmed at all, so refuse
+    # rather than merely warn.
+    if area is None:
+        reasons.append(f"no {ICE_AREA_VAR} series: cannot confirm the ice edge "
+                       f"settled — refusing (the conduction law and fixed-area "
+                       f"scaling both assume a settled edge)")
+    else:
         d_area = _icefrac_change(t, area, w)
         if d_area > config.max_icefrac_change:
             reasons.append(f"ice edge still moving: {ICE_AREA_VAR} changed by "
                            f"{d_area:.3f} across the window (> "
                            f"{config.max_icefrac_change}); the "
                            f"conduction law and fixed-area scaling need a settled edge")
-    else:
-        warnings.append(f"no {ICE_AREA_VAR} series: cannot confirm the ice edge settled")
 
-    if _have(columns, ICE_ENTHALPY_VAR, which):
+    # Likewise a missing qi series, or qi/hi drifting more than the allowed
+    # fraction, means enthalpy-per-volume stability (which scaling eicen with
+    # vicen assumes) cannot be confirmed — refuse rather than warn.
+    if not _have(columns, ICE_ENTHALPY_VAR, which):
+        reasons.append(f"no {ICE_ENTHALPY_VAR} series: cannot confirm enthalpy per "
+                       f"unit ice volume is steady before scaling eicen with vicen")
+    else:
         _, q_fit = _annual(columns, ICE_ENTHALPY_VAR, which)
         ratio = q_fit[w] / h_fit[w]
         drift = float(abs(np.polyfit(t[w], ratio, 1)[0]) * window / abs(ratio.mean()))
         if drift > config.max_enthalpy_drift:
-            warnings.append(f"{ICE_ENTHALPY_VAR}/{ICE_VOLUME_VAR} drifted {drift:.1%} "
-                            f"over the window: enthalpy per volume is not steady, so "
-                            f"scaling eicen with vicen is approximate")
+            reasons.append(f"{ICE_ENTHALPY_VAR}/{ICE_VOLUME_VAR} drifted {drift:.1%} "
+                           f"over the window (> {config.max_enthalpy_drift:.0%}): "
+                           f"enthalpy per unit ice volume is not steady, refusing to "
+                           f"scale eicen with vicen")
 
     factor = raw = N_after = skipped = None
     clipped = False
@@ -361,9 +425,17 @@ def advise(columns: Dict[str, np.ndarray], case: str,
         _, X_nat = _annual(columns, var, "native")
         temps[var] = extrapolate(var, N_fit[w], X_fit[w], N_ref, float(X_nat[-1]),
                                  "linear", gate)
-        if factor is not None and not temps[var].accepted:
-            warnings.append(f"{var} reference not available: "
-                            + "; ".join(temps[var].reasons))
+        if not temps[var].accepted:
+            # A rejected temperature reference (kink / feedback threshold, or
+            # too far beyond the sampled range) is fail-closed: refuse the
+            # jump, do not merely warn (feasibility-review finding 2). The
+            # `check` step relies on this reference being trustworthy.
+            reasons.append(f"{var}(N) reference rejected: "
+                           + "; ".join(temps[var].reasons))
+
+    if any(not r.accepted for r in temps.values()):
+        factor = raw = N_after = skipped = None
+        clipped = False
 
     return result(N_target, N_now_fit, ice, temps, factor, raw, clipped, N_after,
                   skipped)

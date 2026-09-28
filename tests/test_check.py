@@ -81,3 +81,30 @@ def test_log_without_fit_is_rejected():
     with pytest.raises(ValueError, match="conduction-law fit"):
         check_jump(stefan_columns(), {"jump_model_year": 50, "ice_factor": 1.2,
                                       "advice": None})
+
+
+def test_not_pass_when_ts_reference_missing():
+    log = jump_log()
+    log["advice"]["temperatures"].pop("TS", None)
+    cols = stefan_columns(years=JUMP_YEAR - 1 + 8, jump_year=JUMP_YEAR,
+                          factor=log["ice_factor"])
+    res = check_jump(cols, log, start_year=1)
+    assert res.verdict is not Verdict.PASS
+    assert any("TS(N) reference" in r for r in res.reasons)
+
+
+def test_not_pass_when_ts_reference_rejected():
+    log = jump_log()
+    log["advice"]["temperatures"]["TS"]["accepted"] = False
+    cols = stefan_columns(years=JUMP_YEAR - 1 + 8, jump_year=JUMP_YEAR,
+                          factor=log["ice_factor"])
+    res = check_jump(cols, log, start_year=1)
+    assert res.verdict is not Verdict.PASS
+    assert any("TS(N) reference" in r for r in res.reasons)
+
+
+def test_invalid_check_config_rejected():
+    with pytest.raises(ValueError):
+        CheckConfig(settle_years=0)
+    with pytest.raises(ValueError):
+        CheckConfig(min_years=0)

@@ -157,6 +157,16 @@ class PhaseGateConfig:
     #: |pred_linear - pred_saturating| / |step| (temperature forms only)
     max_relative_disagreement: float = 1.0
 
+    def __post_init__(self) -> None:
+        if self.max_extrapolation_ratio <= 0:
+            raise ValueError(f"max_extrapolation_ratio must be positive, got "
+                             f"{self.max_extrapolation_ratio!r}")
+        if self.min_points < 2:
+            raise ValueError(f"min_points must be at least 2, got {self.min_points!r}")
+        if not (0.0 <= self.min_abs_corr <= 1.0):
+            raise ValueError(f"min_abs_corr must satisfy 0 <= min_abs_corr <= 1, got "
+                             f"{self.min_abs_corr!r}")
+
 
 @dataclass(frozen=True)
 class PhaseExtrapolation:

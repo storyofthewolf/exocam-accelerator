@@ -55,6 +55,15 @@ class CheckConfig:
     #: pre-jump years whose offset from the fitted relations is subtracted
     baseline_years: int = 5
 
+    def __post_init__(self) -> None:
+        if self.settle_years <= 0:
+            raise ValueError(f"settle_years must be positive, got {self.settle_years!r}")
+        if self.min_years <= 0:
+            raise ValueError(f"min_years must be positive, got {self.min_years!r}")
+        if self.baseline_years <= 0:
+            raise ValueError(f"baseline_years must be positive, got "
+                             f"{self.baseline_years!r}")
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -137,11 +146,16 @@ def check_jump(columns: Dict[str, np.ndarray], jump_log: dict,
     metrics.update(N_obs=float(N[settled].mean()), N_law=float(N_law.mean()),
                    dN=dN, tol_N=tol_N, N_bias_before=bias_N)
 
-    # TS on the Gregory relation?
+    # TS on the Gregory relation? Only when the advisor's TS(N) reference was
+    # actually accepted (feasibility-review finding 2/1): a rejected or
+    # missing reference is a defect in the advice itself, not something more
+    # settled years can resolve, so it must not be used, and it forces the
+    # verdict away from PASS below (`ts_ok`).
     dT = tol_T = None
     ts = (advice.get("temperatures") or {}).get("TS") or {}
+    ts_ok = bool(ts.get("accepted"))
     lin = (ts.get("fits") or {}).get("linear")
-    if lin and f"TS_native" in columns:
+    if ts_ok and lin and f"TS_native" in columns:
         c0, c1 = lin["params"]
         _, T = _annual(columns, "TS", "native")
         bias_T = (float(np.mean(T[last] - (c0 + c1 * (a + b / h[last]))))
@@ -167,7 +181,10 @@ def check_jump(columns: Dict[str, np.ndarray], jump_log: dict,
     if bad_T:
         reasons.append(f"TS is off the Gregory relation by {dT:+.2f} K "
                        f"(tolerance {tol_T:.2f})")
-    if dT is None:
+    if not ts_ok:
+        reasons.append("no accepted TS(N) reference in the jump log: the standard "
+                       "aqua_ice protocol cannot verify TS, so this jump cannot PASS")
+    elif dT is None:
         reasons.append("no TS reference in the jump log: TS not checked")
 
     melting = "hi_trend_m_per_yr" in metrics and metrics["hi_trend_m_per_yr"] < 0
@@ -177,6 +194,11 @@ def check_jump(columns: Dict[str, np.ndarray], jump_log: dict,
             return done(Verdict.FAIL)
         reasons.append(f"{n_set} of {config.min_years} settled years so far")
         return done(Verdict.WAIT)
-    if bad_N or bad_T or melting:
+    # A missing/rejected TS reference is a defect in the advice, not in the
+    # run: once enough settled years exist to otherwise PASS, treat it as
+    # FAIL (not WAIT) — waiting longer cannot fix a reference that was never
+    # accepted, and the standard protocol requires it (feasibility-review
+    # finding 2).
+    if bad_N or bad_T or melting or not ts_ok:
         return done(Verdict.FAIL)
     return done(Verdict.PASS)

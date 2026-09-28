@@ -16,6 +16,7 @@ exocam-trend grows that capability.
 from __future__ import annotations
 
 import glob
+import hashlib
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -94,6 +95,22 @@ def case_start_year(directory, case_id: str) -> int:
                                  f"annual means need a January start")
             return int(m.group(1))
     raise FileNotFoundError(f"no exocam-trend files for {case_id} in {directory}")
+
+
+def file_provenance(directory, case_id: str) -> Dict[str, str]:
+    """``{file name: sha256 hex digest}`` for a case's exocam-trend files.
+
+    Binds advice (``advise.Advice.to_dict()["provenance"]``) to the exact
+    input series it was fit from, for later audit (feasibility-review, Stage
+    0 item 5). Uses the same file set as ``load_case``; returns ``{}`` if
+    none are found (``load_case`` itself will raise on that).
+    """
+    directory = Path(directory)
+    out: Dict[str, str] = {}
+    for suffix in _COMPONENT_SUFFIXES:
+        for path in sorted(directory.glob(f"{case_id}_*_{suffix}.txt")):
+            out[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return out
 
 
 def load_case(directory, case_id: str) -> Dict[str, np.ndarray]:

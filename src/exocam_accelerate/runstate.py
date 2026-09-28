@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
 
+from .advise import ADVICE_SCHEMA_VERSION
 from .restart import (
     DATE_RE,
     STATE_DIR,
@@ -41,6 +42,11 @@ from .restart import (
 )
 
 _HIST_RE = re.compile(r"\.(\d{4})-(\d{2})(?:-\d{2}(?:-\d{5})?)?\.nc$")
+
+#: Advice schema versions this build understands. ``preflight`` refuses advice
+#: whose ``schema_version`` is missing or not in this set (feasibility-review
+#: finding, Stage 0 item 5).
+KNOWN_ADVICE_SCHEMA_VERSIONS = {ADVICE_SCHEMA_VERSION}
 
 
 def active_jobs() -> Optional[Set[str]]:
@@ -95,22 +101,38 @@ def _hist_ym(name: str) -> Optional[Tuple[int, int]]:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def _rpointer_dates(rundir: Path) -> dict:
+def _rpointer_targets(rundir: Path) -> dict:
+    """Map each ``rpointer.*`` file to the (first) restart file name it names."""
     out = {}
     for rp in sorted(rundir.glob("rpointer.*")):
-        lines = [l.strip() for l in rp.read_text().splitlines() if l.strip()]
-        m = DATE_RE.search(lines[0]) if lines else None
-        out[rp.name] = "-".join(m.groups()) if m else None
+        lines = [l.strip() for l in rp.read_text().splitlines()
+                if l.strip() and not l.strip().startswith("#")]
+        out[rp.name] = lines[0].lstrip("./").strip() if lines else None
+    return out
+
+
+def _rpointer_dates(rundir: Path) -> dict:
+    out = {}
+    for rp_name, name in _rpointer_targets(rundir).items():
+        m = DATE_RE.search(name) if name else None
+        out[rp_name] = "-".join(m.groups()) if m else None
     return out
 
 
 def preflight(cice_r, archive: Optional[Path] = None,
               probe: Optional[JobProbe] = active_jobs,
-              advice: Optional[dict] = None) -> List[Finding]:
+              advice: Optional[dict] = None,
+              allow_no_archive: bool = False) -> List[Finding]:
     """Checks before editing ``cice_r`` in place. Any "block" finding refuses.
 
     ``archive`` is the case's short-term archive root (DOUT_S_ROOT, i.e. the
     directory holding ``rest/``). ``probe`` = None skips the SLURM check.
+
+    A verified rollback source is mandatory (feasibility-review finding 1):
+    without ``archive``, ``preflight`` blocks unless ``allow_no_archive`` is
+    also set, in which case every component restart named by a
+    ``rpointer.*`` file must be present in the run directory itself (the
+    rundir-sourced rollback path ``runstate.plan_rollback`` falls back to).
     """
     cice_r = Path(cice_r).resolve()
     rundir = cice_r.parent
@@ -144,10 +166,31 @@ def preflight(cice_r, archive: Optional[Path] = None,
         else:
             out.append(Finding("ok", f"newest history {newest[1]} precedes the restart"))
 
-    # the archived set is the rollback source
+    # the archived set is the rollback source — a verified rollback source is
+    # mandatory (feasibility-review finding 1): fail closed, do not warn.
     if archive is None:
-        out.append(Finding("warn", "no --archive given: cannot confirm a pristine "
-                                   "archived restart set exists for rollback"))
+        if not allow_no_archive:
+            out.append(Finding("block", "no --archive given: a verified rollback "
+                                        "source is required before a jump (pass "
+                                        "--archive, or --allow-no-archive-rollback "
+                                        "only after confirming every component "
+                                        "restart is retained in the run directory)"))
+        else:
+            targets = _rpointer_targets(rundir)
+            missing = {rp: name for rp, name in targets.items()
+                      if name and not (rundir / name).is_file()}
+            if not targets:
+                out.append(Finding("block", f"--allow-no-archive-rollback: no "
+                                            f"rpointer.* files in {rundir} to verify"))
+            elif missing:
+                out.append(Finding("block", f"--allow-no-archive-rollback: rpointer-"
+                                            f"named restart(s) missing from {rundir}: "
+                                            f"{missing} — rollback would be impossible"))
+            else:
+                out.append(Finding("ok", f"--allow-no-archive-rollback: all "
+                                         f"{len(targets)} rpointer-named restarts "
+                                         f"present in {rundir} (no archived copy "
+                                         f"verified)"))
     else:
         rest = Path(archive) / "rest" / date
         if not (rest / cice_r.name).is_file():
@@ -165,13 +208,26 @@ def preflight(cice_r, archive: Optional[Path] = None,
             else:
                 out.append(Finding("ok", f"pristine archived restart set at {rest}"))
 
-    # the advice must describe this case at (about) this date
+    # the advice must be bound to this case, this restart date, and a schema
+    # this build understands (feasibility-review finding, Stage 0 item 5)
     if advice is not None:
-        if advice.get("case") and advice["case"] != case:
+        schema = advice.get("schema_version")
+        if schema not in KNOWN_ADVICE_SCHEMA_VERSIONS:
+            out.append(Finding("block", f"advice schema_version {schema!r} is missing "
+                                        f"or unrecognized (known: "
+                                        f"{sorted(KNOWN_ADVICE_SCHEMA_VERSIONS)}): "
+                                        f"refusing to bind it to this jump"))
+        if not advice.get("case"):
+            out.append(Finding("block", "advice has no case name recorded: cannot "
+                                        "verify it is bound to this restart"))
+        elif advice["case"] != case:
             out.append(Finding("block", f"advice is for {advice['case']!r}, the "
                                         f"restart is {case!r}"))
         yr = advice.get("model_year")
-        if yr is not None:
+        if yr is None:
+            out.append(Finding("block", "advice has no model_year recorded: cannot "
+                                        "verify it is bound to this restart date"))
+        else:
             gap = first_model_year(date) - 1 - int(yr)
             if gap > 5:
                 out.append(Finding("block", f"advice uses data through model year "

@@ -16,6 +16,7 @@ netCDF4 = pytest.importorskip("netCDF4")
 from test_restart import make_cice_r, read  # noqa: E402
 
 from exocam_accelerate import restart, runstate  # noqa: E402
+from exocam_accelerate.advise import ADVICE_SCHEMA_VERSION  # noqa: E402
 from exocam_accelerate.cli import main  # noqa: E402
 
 CASE = "case"
@@ -112,7 +113,8 @@ class TestPreflight:
     def test_advice_staleness(self, case, year, level):
         run, archive = case
         f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", archive, no_jobs,
-                               {"case": CASE, "model_year": year})
+                               {"case": CASE, "model_year": year,
+                                "schema_version": ADVICE_SCHEMA_VERSION})
         assert levels(f) >= {level}
         if level == "ok":
             assert not runstate.blocked(f)
@@ -120,8 +122,51 @@ class TestPreflight:
     def test_advice_for_other_case_blocks(self, case):
         run, archive = case
         f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", archive, no_jobs,
-                               {"case": "other", "model_year": 100})
+                               {"case": "other", "model_year": 100,
+                                "schema_version": ADVICE_SCHEMA_VERSION})
         assert runstate.blocked(f)
+
+    def test_advice_missing_schema_version_blocks(self, case):
+        run, archive = case
+        f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", archive, no_jobs,
+                               {"case": CASE, "model_year": 100})
+        assert runstate.blocked(f)
+        assert any("schema_version" in x.message for x in f if x.level == "block")
+
+    def test_advice_unknown_schema_version_blocks(self, case):
+        run, archive = case
+        f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", archive, no_jobs,
+                               {"case": CASE, "model_year": 100,
+                                "schema_version": "999"})
+        assert runstate.blocked(f)
+        assert any("schema_version" in x.message for x in f if x.level == "block")
+
+    def test_advice_missing_case_blocks(self, case):
+        run, archive = case
+        f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", archive, no_jobs,
+                               {"model_year": 100, "schema_version": ADVICE_SCHEMA_VERSION})
+        assert runstate.blocked(f)
+
+    def test_no_archive_without_override_blocks(self, case):
+        run, archive = case
+        f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", None, no_jobs)
+        assert any("no --archive given" in x.message for x in f if x.level == "block")
+
+    def test_no_archive_with_override_and_full_local_set_passes(self, case):
+        run, archive = case
+        f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", None, no_jobs,
+                               allow_no_archive=True)
+        assert not runstate.blocked(f), f
+        assert any("--allow-no-archive-rollback" in x.message for x in f
+                  if x.level == "ok")
+
+    def test_no_archive_with_override_but_missing_component_blocks(self, case):
+        run, archive = case
+        (run / f"{CASE}.cam.r.{D0}.nc").unlink()
+        f = runstate.preflight(run / f"{CASE}.cice.r.{D0}.nc", None, no_jobs,
+                               allow_no_archive=True)
+        assert runstate.blocked(f)
+        assert any("missing from" in x.message for x in f if x.level == "block")
 
 
 def advance(run, archive):
@@ -204,8 +249,29 @@ class TestRollback:
 def test_cli_jump_preflight_end_to_end(case, tmp_path):
     run, archive = case
     advice = tmp_path / "advice.json"
-    advice.write_text(json.dumps({"case": CASE, "ice_factor": 1.25, "model_year": 100}))
+    advice.write_text(json.dumps({"case": CASE, "ice_factor": 1.25, "model_year": 100,
+                                  "schema_version": ADVICE_SCHEMA_VERSION}))
     assert main(["jump", "--rundir", str(run), "--advice", str(advice),
                  "--archive", str(archive), "--skip-slurm-check", "--yes"]) == 0
     log = restart.find_jump_logs(run)[0]
     assert json.loads(log.read_text())["jump_model_year"] == 101
+
+
+def test_cli_jump_blocks_without_archive_or_override(case, tmp_path):
+    run, archive = case
+    advice = tmp_path / "advice.json"
+    advice.write_text(json.dumps({"case": CASE, "ice_factor": 1.25, "model_year": 100,
+                                  "schema_version": ADVICE_SCHEMA_VERSION}))
+    assert main(["jump", "--rundir", str(run), "--advice", str(advice),
+                 "--skip-slurm-check", "--yes"]) == 3
+    assert restart.find_jump_logs(run) == []
+
+
+def test_cli_jump_with_unknown_schema_version_blocks(case, tmp_path):
+    run, archive = case
+    advice = tmp_path / "advice.json"
+    advice.write_text(json.dumps({"case": CASE, "ice_factor": 1.25, "model_year": 100,
+                                  "schema_version": "999"}))
+    assert main(["jump", "--rundir", str(run), "--advice", str(advice),
+                 "--archive", str(archive), "--skip-slurm-check", "--yes"]) == 3
+    assert restart.find_jump_logs(run) == []

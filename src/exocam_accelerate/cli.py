@@ -44,13 +44,17 @@ def _start_year(args) -> int:
 
 
 def cmd_advise(args) -> int:
+    from .trend_io import file_provenance
+
     cols = load_case(args.trend_dir, args.case)
+    provenance = file_provenance(args.trend_dir, args.case)
     gate = PhaseGateConfig(max_extrapolation_ratio=args.max_extrapolation_ratio)
     cfg = AdvisorConfig(window_years=args.window, which=args.which,
                         n_fraction=args.n_fraction, N_target=args.n_target,
                         max_ice_factor=args.max_ice_factor, gate=gate,
                         since_year=args.since)
-    adv = advise(cols, args.case, cfg, start_year=_start_year(args))
+    adv = advise(cols, args.case, cfg, start_year=_start_year(args),
+                provenance=provenance)
 
     since = f"   post-jump since year {adv.since_year}" if adv.since_year else ""
     print(f"case {adv.case}   data through model year {adv.model_year}   fit "
@@ -120,7 +124,8 @@ def cmd_jump(args) -> int:
     probe = None if args.skip_slurm_check else active_jobs
     archive = Path(args.archive) if args.archive else None
     print("pre-flight:")
-    findings = preflight(path, archive, probe, advice)
+    findings = preflight(path, archive, probe, advice,
+                         allow_no_archive=args.allow_no_archive_rollback)
     _print_findings(findings)
     if blocked(findings):
         print("refusing to jump: resolve the BLOCK items above")
@@ -247,7 +252,9 @@ def _add_trend(p):
 
 def _add_safety(p):
     p.add_argument("--archive", help="the case's short-term archive root "
-                                     "(DOUT_S_ROOT, holding rest/<date>/)")
+                                     "(DOUT_S_ROOT, holding rest/<date>/); the "
+                                     "rollback source, mandatory for 'jump' unless "
+                                     "--allow-no-archive-rollback is also passed")
     p.add_argument("--skip-slurm-check", action="store_true",
                    help="skip the squeue probe (only after confirming yourself "
                         "that no job for the case is queued or running)")
@@ -290,6 +297,12 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--snow-factor", type=float, default=1.0,
                    help="scale vsnon/esnon too (default 1 = untouched)")
     _add_safety(j)
+    j.add_argument("--allow-no-archive-rollback", action="store_true",
+                   help="escape hatch for a missing --archive: proceed without an "
+                        "archived restart set, after verifying that every "
+                        "rpointer-named component restart is present in the run "
+                        "directory (only a valid rollback source until the next "
+                        "st_archive sweep — normally pass --archive instead)")
     j.set_defaults(func=cmd_jump)
 
     c = sub.add_parser("check", help="score the post-jump run: PASS/WAIT/FAIL")
