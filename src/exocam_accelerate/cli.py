@@ -10,6 +10,8 @@ check     after the post-jump segment: PASS / WAIT / FAIL against the advice
           the jump was sized from (exit 0 / 10 / 20, for scripted polling).
 rollback  reset the whole restart set to the pre-jump date (from the archive).
 restore   before resubmitting only: put the pristine cice.r back.
+view      local interactive viewer (http://127.0.0.1:8765) of the trend files and
+          jump logs in a directory: phase space, fits, jumps, check verdicts.
 
 Workflow per case: advise -> jump -> resubmit a SHORT continuation segment
 (CONTINUE_RUN=TRUE) -> regenerate trends -> check -> PASS: resume normal
@@ -262,6 +264,14 @@ def _add_safety(p):
     p.add_argument("--yes", action="store_true", help="skip confirmation")
 
 
+def cmd_view(args) -> int:
+    from .viewer import serve
+
+    serve(args.directory, host=args.host, port=args.port,
+          open_browser=not args.no_browser)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="exocam-accelerate", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -324,6 +334,15 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("restore", help="before resubmitting: pristine cice.r back")
     _add_target(s)
     s.set_defaults(func=cmd_restore)
+
+    v = sub.add_parser("view", help="interactive local viewer of trends, fits and jumps")
+    v.add_argument("directory", help="directory holding <case>_*_{cam,cice}.txt and "
+                                     "any *.accel.json jump logs (subdirs searched too)")
+    v.add_argument("--port", type=int, default=8765)
+    v.add_argument("--host", default="127.0.0.1",
+                   help="bind address (default localhost only)")
+    v.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    v.set_defaults(func=cmd_view)
     return ap
 
 

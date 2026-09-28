@@ -178,6 +178,23 @@ current imbalance (`--n-fraction 0.5`), target clipped to 5x the window's
 N-range, ice factor capped at 1.5 (`--max-ice-factor`); hard bound 2.0 whatever
 the flags say. Snow is left alone unless `--snow-factor` is given.
 
+## Viewing a case (`exocam-accelerate view`)
+
+```
+exocam-accelerate view DIR          # -> http://127.0.0.1:8765 (next free port if busy)
+```
+
+`DIR` holds exocam-trend `<case>_*_{cam,cice}.txt` files and, optionally, jump
+logs (`*.nc.accel.json`, copied from `run/exocam_accelerate/`; one level of
+subdirectories is searched). The page shows, per case: the advice (or refusal
+reasons), the phase-space picture N vs hi with the fitted conduction law and
+the jump's landing point, TS vs N, the model years a jump skips (Stefan
+growth on the model clock, post-jump data in equivalent years), time series
+with fit window and predicted levels, and each jump's `check` verdict.
+Controls re-run `advise` live (what-if); nothing is written. The page
+refreshes when files in `DIR` change. Fetching new trend data from the HPC is
+a separate step.
+
 ## Related tools
 
 - [`exocam-trend`](../exocam-trend) (dependency) — produces global-mean

@@ -26,5 +26,8 @@ dev = ["pytest>=7"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+exocam_accelerate = ["viewer_assets/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
