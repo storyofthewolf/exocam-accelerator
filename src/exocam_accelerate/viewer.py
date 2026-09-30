@@ -57,7 +57,7 @@ import numpy as np
 from .advise import (ICE_AREA_VAR, ICE_ENTHALPY_VAR, ICE_VOLUME_VAR, AdvisorConfig,
                      _annual, _have, advise, model_years)
 from .check import check_any, check_jump
-from .ocean_advise import OceanAdvisorConfig, advise_ocean
+from .ocean_advise import OceanAdvisorConfig, ProbeConfig, advise_ocean, probe_ocean
 from .phase_space import PhaseGateConfig
 from .restart import LOG_SUFFIX
 from .trend_io import merge_trend_files
@@ -278,8 +278,11 @@ OCEAN_SERIES = ("energy_top", "energy_bot", "TS", ICE_AREA_VAR)
 def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1,
                   config: OceanAdvisorConfig = OceanAdvisorConfig(),
                   jump_logs: Optional[List[dict]] = None,
-                  maps: Optional[List[dict]] = None) -> dict:
-    """Everything the page draws for one hot (som_ocean) case."""
+                  maps: Optional[List[dict]] = None,
+                  probe: Optional[ProbeConfig] = None) -> dict:
+    """Everything the page draws for one hot (som_ocean) case. With ``probe``
+    the probe advice is added (``probe``), with the outcome fan: where the
+    post-probe state lands in phase space for each feedback lambda."""
     t, _ = _annual(columns, "TS", "native")
     years = model_years(t, start_year)
     series = {}
@@ -337,6 +340,19 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
                 proj["TS_jumped"] = c0 - (c0 - adv.TS_after) * np.exp(-dt / adv.tau_years)
             greg["projection"] = proj
 
+    probe_d = None
+    if probe is not None:
+        probe_d = probe_ocean(columns, case, probe, start_year=start_year)
+        if probe_d.get("somtp_dT") is not None:
+            dT, N0 = probe_d["somtp_dT"], probe_d["N_now"]
+            lr = probe_d.get("lambda_recent") or {}
+            lam_hi = max(1.0, (lr.get("value") or 0) + 2 * (lr.get("se") or 0))
+            lams = np.linspace(0.0, lam_hi, 41)
+            probe_d["fan"] = {"lambda": lams, "N": N0 - lams * dT,
+                              "TS": probe_d["TS_after"]}
+            # the probe overshoots the equilibrium when lambda > N_now / dT
+            probe_d["lambda_overshoot"] = N0 / dT if N0 * dT > 0 else None
+
     jumps = []
     for log in jump_logs or []:
         if log.get("plugin") != "som_ocean":
@@ -368,7 +384,7 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
                   "years": years, "which": adv.which_used,
                   "imbalance": config.imbalance, "series": series,
                   "advice": advice, "window": window, "gregory": greg,
-                  "tried": tried,
+                  "tried": tried, "probe": probe_d,
                   "jumps": jumps, "maps": [m for m in (maps or [])
                                            if m.get("case") in (None, case)]})
 
@@ -416,6 +432,9 @@ def case_summary(payload: dict) -> dict:
     adv = payload["advice"]
     last = payload["jumps"][-1] if payload["jumps"] else None
     ocean = payload.get("regime") == "ocean"
+    if ocean and payload.get("probe"):
+        adv = dict(adv, somtp_dT=payload["probe"].get("somtp_dT"),
+                   reasons=payload["probe"].get("reasons", []))
     return {"case": payload["case"], "regime": payload.get("regime", "ice"),
             "model_year": adv["model_year"],
             "N_now": adv["N_now"], "ice_factor": adv.get("ice_factor"),
@@ -460,8 +479,13 @@ def any_payload(cols, case, start_year, q, logs, maps=None) -> dict:
     overrides)."""
     regime = q.get("regime", [""])[0] or case_regime(cols)
     if regime == "ocean":
-        return ocean_payload(cols, case, start_year, ocean_config_from_query(q),
-                             logs, maps)
+        oc = ocean_config_from_query(q)
+        pr = None
+        if q.get("probe", [""])[0] in ("1", "true"):
+            pr = ProbeConfig(probe_years=_num(q, "probe_years") or 15.0,
+                             probe_dT=_num(q, "probe_dT"), max_dT=oc.max_dT,
+                             imbalance=oc.imbalance)
+        return ocean_payload(cols, case, start_year, oc, logs, maps, pr)
     p = case_payload(cols, case, start_year, config_from_query(q), logs)
     p["regime"] = "ice"
     return p

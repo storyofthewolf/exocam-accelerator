@@ -524,3 +524,152 @@ def pattern_advice(advice: dict, summary: dict) -> dict:
     out = dict(advice)
     out.update(schema_version=OCEAN_PATTERN_SCHEMA_VERSION, pattern=dict(summary))
     return out
+
+
+# ---------------------------------------------------------------------------
+# probe mode: a warm (or cool) perturbation to map the trajectory
+# ---------------------------------------------------------------------------
+#
+# Where the Gregory line is refused because the recent relation is not
+# constrained (atlasfu D4/D5, 2026-09-30: over the last 10-20 yr energy_bot
+# moves by less than its noise while TS rises 3-6 K, so lambda is anywhere in
+# 0-0.5 W/m2/K and the equilibrium anywhere above ~375 K), the jump is not
+# sized to an equilibrium. It is a probe: step TS ahead by the run's own recent
+# warming over ``probe_years`` (forward Euler behind the time-domain
+# trustworthiness gate and the hard clip), then read the response. The probe
+# supplies the lever arm the natural run lacks: a settled post-probe point
+# several K away from the pre-probe point measures lambda directly, and the
+# sign of energy_bot after it says which side of the equilibrium the run is on
+# (``check.check_ocean_probe``).
+
+OCEAN_PROBE_SCHEMA_VERSION = "ocean-probe-1"
+
+
+@dataclass(frozen=True)
+class ProbeConfig:
+    #: the probe steps TS by (recent dTS/dt) x probe_years
+    probe_years: float = 15.0
+    #: explicit probe size, K: skips the trend sizing and its gate (the
+    #: user's judgment, e.g. a run whose year-to-year swings fail the gate)
+    probe_dT: Optional[float] = None
+    #: years of native annual TS the recent trend is fitted over
+    trend_years: int = 15
+    max_dT: float = 10.0
+    #: the probe must exceed this many interannual TS sigmas (so it is visible)
+    min_sigmas: float = 3.0
+    #: years averaged for the pre-probe point and in the lambda estimate
+    recent_years: int = 5
+    imbalance: str = "energy_bot"
+    max_icefrac: float = 0.001
+    spinup_years: int = 5
+    since_year: Optional[int] = None
+    settle_years: int = 2
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.probe_years <= 50.0):
+            raise ValueError(f"probe_years must be in (0, 50], got {self.probe_years!r}")
+        if self.trend_years < 5:
+            raise ValueError("trend_years must be at least 5")
+        if not (0.0 < self.max_dT <= 25.0):
+            raise ValueError(f"max_dT must satisfy 0 < max_dT <= 25 K, got {self.max_dT!r}")
+        if self.recent_years < 3:
+            raise ValueError("recent_years must be at least 3")
+        if self.imbalance not in ("energy_bot", "energy_top"):
+            raise ValueError(f"imbalance must be energy_bot or energy_top, got "
+                             f"{self.imbalance!r}")
+
+
+def probe_ocean(columns: Dict[str, np.ndarray], case: str,
+                config: ProbeConfig = ProbeConfig(), start_year: int = 1,
+                provenance: Optional[Dict[str, str]] = None) -> dict:
+    """Probe advice (a JSON-able dict, ``somtp_dT`` None = do not probe)."""
+    from .safeguards import GateConfig
+    from .stepper import propose_step
+    from .trends import TrendSeries
+
+    t, T = _annual(columns, SURFACE_VAR, "native")
+    years = model_years(t, start_year)
+    reasons: List[str] = []
+    warnings: List[str] = []
+    k = config.recent_years
+    out = {"schema_version": OCEAN_PROBE_SCHEMA_VERSION, "plugin": PLUGIN,
+           "mode": "probe", "case": case, "model_year": int(years[-1]),
+           "since_year": config.since_year,
+           "config": {"probe_years": config.probe_years, "probe_dT": config.probe_dT,
+                      "trend_years": config.trend_years, "max_dT": config.max_dT,
+                      "min_sigmas": config.min_sigmas, "recent_years": k,
+                      "imbalance": config.imbalance},
+           "provenance": dict(provenance) if provenance else None}
+
+    usable = years >= (config.since_year + config.settle_years
+                       if config.since_year is not None
+                       else years[0] + config.spinup_years)
+    if not _have(columns, ICE_AREA_VAR, "native"):
+        reasons.append(f"no {ICE_AREA_VAR} series: cannot confirm the run is ice-free")
+    else:
+        _, ice = _annual(columns, ICE_AREA_VAR, "native")
+        icy = ~(ice <= config.max_icefrac)
+        if icy[-1]:
+            reasons.append(f"{ICE_AREA_VAR} is {ice[-1]:.4f} in the latest year: not "
+                           f"the ice-free regime")
+        elif icy.any():
+            usable &= years > years[icy].max()
+    w = usable & (t > t[-1] - config.trend_years)
+    _, N = _annual(columns, config.imbalance, "native")
+    if not reasons and w.sum() < config.trend_years:
+        reasons.append(f"only {int(w.sum())} usable years for the trend (need "
+                       f"{config.trend_years})")
+    if not reasons and not (np.all(np.isfinite(T[w])) and np.all(np.isfinite(N[w]))):
+        reasons.append("non-finite TS or N in the trend window")
+
+    if not reasons:
+        step = propose_step(TrendSeries(t[w], T[w]), config.probe_years, config.max_dT,
+                            GateConfig())
+        tr = np.polyfit(t[w], T[w], 1)
+        sig_T = float(np.std(T[w] - np.polyval(tr, t[w]), ddof=2))
+        Nr = N[w][-k:]
+        sig_N = float(np.std(N[w] - np.polyval(np.polyfit(t[w], N[w], 1), t[w]), ddof=2))
+        out.update(TS_now=float(T[-1]), trend_K_per_yr=float(tr[0]), sigma_TS=sig_T,
+                   N_now=float(Nr.mean()), sigma_N=sig_N)
+        # two-period lambda over the window (context: why a probe is needed)
+        a, b = N[w][-2 * k:-k], N[w][-k:]
+        dTp = float(T[w][-k:].mean() - T[w][-2 * k:-k].mean())
+        if a.size == k and dTp != 0:
+            se = float(np.sqrt(a.var(ddof=1) / k + b.var(ddof=1) / k))
+            out["lambda_recent"] = {"value": float(-(b.mean() - a.mean()) / dTp),
+                                    "se": abs(se / dTp), "dTS": dTp}
+        if config.probe_dT is not None:
+            dT = float(np.clip(config.probe_dT, -config.max_dT, config.max_dT))
+            out["somtp_dT_raw"] = float(config.probe_dT)
+            out["somtp_dT_clipped"] = dT != config.probe_dT
+            out["sizing"] = "explicit"
+            if not step.accepted:
+                warnings.append("the trend gate would have refused an automatic probe: "
+                                + "; ".join(step.gate.reasons))
+        elif not step.accepted:
+            reasons.extend(step.gate.reasons)
+        else:
+            dT = float(step.delta)
+            out["somtp_dT_raw"] = float(step.tendency * config.probe_years)
+            out["somtp_dT_clipped"] = bool(step.clip.any_clipped)
+            out["sizing"] = "trend"
+        if not reasons:
+            if abs(dT) < config.min_sigmas * sig_T:
+                reasons.append(f"probe {dT:+.2f} K is within {config.min_sigmas:g} "
+                               f"interannual TS sigmas ({sig_T:.2f} K): its response "
+                               f"would not be readable — lengthen --probe-years")
+            else:
+                n = k
+                se_dN = sig_N * np.sqrt(2.0 / n)
+                out.update(somtp_dT=dT, TS_after=float(T[-1] + dT),
+                           expected_after_jump={"TS": float(T[-1] + dT)},
+                           # smallest lambda the check can tell from zero
+                           lambda_detectable=float(2.0 * se_dN / abs(dT)),
+                           years_skipped=(float(config.probe_years) if out["sizing"] == "trend"
+                               else float(abs(dT / tr[0])) if tr[0] * dT > 0 else None))
+                if out["somtp_dT_clipped"]:
+                    warnings.append(f"probe {out['somtp_dT_raw']:+.2f} K clipped to "
+                                    f"{dT:+.2f} K")
+    out.setdefault("somtp_dT", None)
+    out["reasons"], out["warnings"] = reasons, warnings
+    return out

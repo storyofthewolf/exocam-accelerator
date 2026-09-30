@@ -66,7 +66,10 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   line TS(N_bot), current state must lie on it (refuses the steepening D4/D5),
   jump floor = interannual TS scatter, `--heat-ratio` (default 1) for heat the
   atmosphere takes back. Uniform by default; `pattern` = measured warming
-  pattern (user asked for both). `som_ocean.py` (pure), `ocean_advise.py`,
+  pattern (user asked for both). **Probe mode** (user decision: flattening N
+  is not proof of runaway; a warm perturbation maps the trajectory): step
+  = recent TS trend × probe_years behind the time-domain gate, or explicit;
+  `check_ocean_probe` measures λ from the lever arm, FAILs if N grows. `som_ocean.py` (pure), `ocean_advise.py`,
   `restart.apply_ocean_jump`/`write_somtp_map`, `check.check_ocean_jump`,
   `cli advise-ocean|pattern|somtp-map`, viewer ocean layout + maps. See
   `docs/ocean-jump.md`.

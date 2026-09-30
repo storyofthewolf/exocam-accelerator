@@ -172,8 +172,40 @@ def _since_from_logs(rundir, plugin: str):
     return max(years) if years else None
 
 
+def _print_probe(d, json_path) -> int:
+    print(f"case {d['case']}   data through model year {d['model_year']}   PROBE mode "
+          f"(maps the trajectory; not sized to an equilibrium)")
+    if "TS_now" in d:
+        print(f"TS now {d['TS_now']:.2f} K, trend {d['trend_K_per_yr']:+.3f} K/yr "
+              f"(sigma {d['sigma_TS']:.2f} K)   {d['config']['imbalance']} "
+              f"{d['N_now']:+.2f} W/m2 (last {d['config']['recent_years']} yr, "
+              f"sigma {d['sigma_N']:.2f})")
+    lr = d.get("lambda_recent")
+    if lr:
+        print(f"recent lambda (two {d['config']['recent_years']}-yr periods, "
+              f"dTS {lr['dTS']:+.2f} K): {lr['value']:+.2f} ± {lr['se']:.2f} W/m2/K")
+    print()
+    for w in d["warnings"]:
+        print(f"warning: {w}")
+    if d["somtp_dT"] is None:
+        print("RECOMMENDATION: no probe.")
+        for r in d["reasons"]:
+            print(f"  - {r}")
+    else:
+        how = (f"{d['config']['probe_years']:g} yr of the recent trend"
+               if d.get("sizing") == "trend" else "explicit --probe-dt")
+        print(f"PROBE somtp increment: {d['somtp_dT']:+.3f} K ({how})")
+        print(f"  TS {d['TS_now']:.2f} -> {d['TS_after']:.2f} K; after "
+              f"{d['config']['recent_years']} settled years 'check' resolves "
+              f"lambda >= ~{d['lambda_detectable']:.2f} W/m2/K")
+    if json_path:
+        Path(json_path).write_text(json.dumps(d, indent=2))
+        print(f"wrote {json_path}")
+    return 0
+
+
 def cmd_advise_ocean(args) -> int:
-    from .ocean_advise import OceanAdvisorConfig, advise_ocean
+    from .ocean_advise import OceanAdvisorConfig, ProbeConfig, advise_ocean, probe_ocean
     from .trend_io import file_provenance
 
     cols = load_case(args.trend_dir, args.case)
@@ -183,6 +215,12 @@ def cmd_advise_ocean(args) -> int:
         if since is not None:
             print(f"jump log in {args.rundir}: fitting post-jump data since model "
                   f"year {since}")
+    if args.probe or args.probe_dt is not None:
+        pc = ProbeConfig(probe_years=args.probe_years, probe_dT=args.probe_dt,
+                         max_dT=args.max_dt, imbalance=args.imbalance, since_year=since)
+        d = probe_ocean(cols, args.case, pc, start_year=_start_year(args),
+                        provenance=file_provenance(args.trend_dir, args.case))
+        return _print_probe(d, args.json)
     gate = PhaseGateConfig(max_extrapolation_ratio=args.max_extrapolation_ratio)
     cfg = OceanAdvisorConfig(window_years=args.window, which=args.which,
                              imbalance=args.imbalance, n_fraction=args.n_fraction,
@@ -482,6 +520,11 @@ def cmd_check(args) -> int:
               f"{m['dTS_expected']:+.2f} expected"
               + (f" (implied heat ratio {m['heat_ratio_implied']:.2f})"
                  if "heat_ratio_implied" in m else ""))
+    if "lambda" in m:
+        print(f"  probe: TS {m['TS_pre']:.2f} -> {m['TS_post']:.2f} K, energy "
+              f"{m['N_pre']:+.2f} -> {m['N_post']:+.2f} W/m2 (± {m['se_dN']:.2f}); "
+              f"lambda {m['lambda']:+.2f} ± {m['lambda_se']:.2f} W/m2/K"
+              + (f"; TS_eq ~{m['TS_eq']:.1f} K" if "TS_eq" in m else ""))
     if "N_line" in m:
         print(f"  N: observed {m['N_obs']:+.2f}, Gregory line {m['N_line']:+.2f} "
               f"(diff {m['dN']:+.2f}, tolerance {m['tol_N']:.2f}) W/m2; TS "
@@ -654,6 +697,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="somtp increment / TS change, to cover the heat the "
                         "atmosphere takes back (1; 'check' reports the implied value)")
     o.add_argument("--max-extrapolation-ratio", type=float, default=5.0)
+    o.add_argument("--probe", action="store_true",
+                   help="probe mode: step TS ahead by the recent trend x "
+                        "--probe-years to map the trajectory (when the Gregory "
+                        "line is not constrained)")
+    o.add_argument("--probe-years", type=float, default=15.0)
+    o.add_argument("--probe-dt", type=float, default=None,
+                   help="explicit probe size, K (implies --probe; skips the trend "
+                        "gate)")
     o.add_argument("--json", help="save advice as JSON (input to 'jump --advice')")
     o.set_defaults(func=cmd_advise_ocean)
 

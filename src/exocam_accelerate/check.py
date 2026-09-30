@@ -248,6 +248,9 @@ def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
     * sanity:  non-finite data in the post-jump years is a FAIL, never a PASS.
     """
     advice = jump_log.get("advice") or {}
+    if advice.get("mode") == "probe":
+        return check_ocean_probe(columns, jump_log, start_year, ProbeCheckConfig(
+            settle_years=config.settle_years))
     jump_year = int(jump_log["jump_model_year"])
     greg = advice.get("gregory") or {}
     try:
@@ -335,6 +338,134 @@ def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
         reasons.append(f"{n_set} of {config.min_years} settled years so far")
         return done(Verdict.WAIT)
     return done(Verdict.FAIL if bad_N else Verdict.PASS)
+
+
+@dataclass(frozen=True)
+class ProbeCheckConfig:
+    settle_years: int = 2
+    #: settled years before a verdict other than WAIT
+    min_years: int = 5
+    #: after this many settled years an unreadable response is reported as
+    #: PASS (lambda below what the probe can resolve) rather than WAIT forever
+    max_wait_years: int = 12
+    min_land_fraction: float = 0.3
+    land_sigmas: float = 2.0
+    #: significance of the energy_bot change, in standard errors
+    n_se: float = 2.0
+
+    def __post_init__(self) -> None:
+        for name in ("settle_years", "min_years", "max_wait_years"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+
+
+def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
+                      start_year: int = 1,
+                      config: ProbeCheckConfig = ProbeCheckConfig()) -> CheckResult:
+    """Read a probe's response: lambda, the implied equilibrium, and the side.
+
+    Compares the settled post-probe years with the ``recent_years`` before
+    the probe (the probe's lever arm):
+
+    * lambda = -(N_post - N_pre) / (TS_post - TS_pre), with its standard error;
+    * FAIL — the imbalance *grew* in the direction of the probe (a warm probe
+      that increases energy_bot): no restoring feedback at the new state, the
+      runaway signature; also a probe that never landed, or non-finite data;
+    * PASS — lambda significantly > 0: ``TS_eq = TS_post + N_post/lambda`` and
+      ``side`` (N_post > 0 after a warm probe: the equilibrium is hotter still;
+      < 0: the probe overshot and the equilibrium is bracketed between the
+      pre- and post-probe states);
+    * WAIT — fewer than ``min_years`` settled years, or a response still inside
+      the noise (until ``max_wait_years``, then PASS with lambda below what the
+      probe resolves).
+    """
+    advice = jump_log.get("advice") or {}
+    cfg = advice.get("config") or {}
+    imbalance = cfg.get("imbalance", "energy_bot")
+    k = int(cfg.get("recent_years") or 5)
+    jump_year = int(jump_log["jump_model_year"])
+    applied = float(jump_log.get("somtp_dT_applied_mean", jump_log.get("somtp_dT")))
+
+    t, N = _annual(columns, imbalance, "native")
+    _, T = _annual(columns, "TS", "native")
+    years = model_years(t, start_year)
+    post = years >= jump_year
+    settled = years >= jump_year + config.settle_years
+    pre = (years < jump_year) & (years >= jump_year - k)
+    n_post, n_set = int(post.sum()), int(settled.sum())
+    reasons: List[str] = []
+    metrics: Dict[str, float] = {"somtp_dT_applied": applied, "dTS_expected": applied}
+
+    def done(verdict):
+        return CheckResult(verdict, reasons, jump_year, n_post, n_set, metrics)
+
+    if n_post == 0:
+        reasons.append(f"no complete model year since the probe at year {jump_year}")
+        return done(Verdict.WAIT)
+    if not (np.all(np.isfinite(N[post | pre])) and np.all(np.isfinite(T[post | pre]))):
+        reasons.append("non-finite TS or N around the probe: the run or its trend "
+                       "output is broken")
+        return done(Verdict.FAIL)
+    if pre.sum() < 3:
+        raise ValueError(f"only {int(pre.sum())} pre-probe years in the trend data")
+
+    sig_T = _noise(T[pre | (years >= jump_year - 10) & (years < jump_year)])
+    drift = float(np.polyfit(t[pre], T[pre], 1)[0])
+    TS_before = float(advice.get("TS_now", T[pre][-1]))
+    moved = float(T[post][0]) - TS_before - drift
+    metrics.update(TS_first=float(T[post][0]), dTS_first=moved,
+                   land_fraction=moved / applied if applied else float("nan"))
+    if (moved / applied < config.min_land_fraction
+            and abs(applied - moved) > config.land_sigmas * sig_T):
+        reasons.append(f"probe did not land: first post-probe TS moved {moved:+.2f} K "
+                       f"(net of drift) vs {applied:+.2f}; was the edited docn.r the "
+                       f"one the run read?")
+        return done(Verdict.FAIL)
+    if n_set < config.min_years:
+        reasons.append(f"probe landed; {n_set} of {config.min_years} settled years "
+                       f"so far")
+        return done(Verdict.WAIT)
+
+    Na, Nb = N[pre], N[settled]
+    dTS = float(T[settled].mean() - T[pre].mean())
+    dN = float(Nb.mean() - Na.mean())
+    se = float(np.sqrt(Na.var(ddof=1) / Na.size + Nb.var(ddof=1) / Nb.size))
+    s = 1.0 if dTS > 0 else -1.0
+    lam = -dN / dTS if dTS else float("nan")
+    lam_se = se / abs(dTS) if dTS else float("nan")
+    N_post, TS_post = float(Nb.mean()), float(T[settled].mean())
+    metrics.update(N_pre=float(Na.mean()), N_post=N_post, dN=dN, se_dN=se,
+                   TS_pre=float(T[pre].mean()), TS_post=TS_post, dTS=dTS,
+                   **{"lambda": lam, "lambda_se": lam_se})
+
+    if s * dN > config.n_se * se:
+        reasons.append(f"{imbalance} rose by {dN:+.2f} ± {se:.2f} W/m2 after a "
+                       f"{dTS:+.2f} K probe: no restoring feedback at this state "
+                       f"(runaway-like) — roll back")
+        return done(Verdict.FAIL)
+    if -s * dN > config.n_se * se:
+        TS_eq = TS_post + N_post / lam
+        metrics["TS_eq"] = TS_eq
+        if N_post * s > 0:
+            side = "hotter still" if s > 0 else "cooler still"
+            metrics["bracketed"] = 0.0
+            reasons.append(f"lambda {lam:.2f} ± {lam_se:.2f} W/m2/K; {imbalance} still "
+                           f"{N_post:+.2f}: the equilibrium is {side}, ~{TS_eq:.1f} K "
+                           f"— another probe or a Gregory jump can follow")
+        else:
+            metrics["bracketed"] = 1.0
+            reasons.append(f"lambda {lam:.2f} ± {lam_se:.2f} W/m2/K; {imbalance} "
+                           f"{N_post:+.2f}: the probe overshot — the equilibrium "
+                           f"(~{TS_eq:.1f} K) lies between {metrics['TS_pre']:.1f} and "
+                           f"{TS_post:.1f} K")
+        return done(Verdict.PASS)
+    if n_set >= config.max_wait_years:
+        reasons.append(f"response within the noise after {n_set} settled years: "
+                       f"|lambda| < ~{config.n_se * lam_se:.2f} W/m2/K at this state")
+        return done(Verdict.PASS)
+    reasons.append(f"{imbalance} changed {dN:+.2f} ± {se:.2f} W/m2 so far: not yet "
+                   f"readable (lambda {lam:+.2f} ± {lam_se:.2f})")
+    return done(Verdict.WAIT)
 
 
 def check_any(columns, jump_log: dict, start_year: int = 1,

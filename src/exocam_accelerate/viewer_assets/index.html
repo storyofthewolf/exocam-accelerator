@@ -145,6 +145,12 @@ body.ocean .ice-only, body:not(.ocean) .ocean-only { display: none; }
       <input type="range" id="hr" min="1" max="2.5" step="0.05" value="1">
     </div>
     <div class="ctl ocean-only">
+      <label><span><input type="checkbox" id="probe"> probe mode</span> <b id="py_v"></b></label>
+      <input type="range" id="py" min="3" max="40" step="1" value="15">
+      <div class="row"><input id="pdt" type="number" step="0.5" placeholder="explicit ΔT (K)"><span class="hint">blank = trend × years</span></div>
+      <div class="hint">A probe steps TS ahead to map the trajectory instead of targeting an equilibrium.</div>
+    </div>
+    <div class="ctl ocean-only">
       <label>phase-space coordinate</label>
       <select id="imb"><option value="energy_bot">energy_bot (surface — slab equilibrium)</option><option value="energy_top">energy_top (TOA — includes the leak)</option></select>
     </div>
@@ -174,7 +180,7 @@ const $ = s => document.querySelector(s);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (x, d = 2) => (x === null || x === undefined || Number.isNaN(x)) ? '–' : Number(x).toFixed(d);
 const sgn = (x, d = 2) => (x === null || x === undefined) ? '–' : (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d);
-const DEFAULTS = { nf: '0.5', mf: '1.5', mdt: '10', hr: '1', imb: 'energy_bot', win: 'auto', which: 'int2', nt: '', since: '' };
+const DEFAULTS = { nf: '0.5', mf: '1.5', mdt: '10', hr: '1', imb: 'energy_bot', py: '15', pdt: '', win: 'auto', which: 'int2', nt: '', since: '' };
 const state = { case: null, data: null, stamp: null, xmode: 'hi', eqtime: false, tvar: 'TS', span: 'recent', prefix: '' };
 
 try { const t = localStorage.getItem('sv-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -187,6 +193,8 @@ function params() {
   p.set('max_dT', $('#mdt').value);
   p.set('heat_ratio', $('#hr').value);
   p.set('imbalance', $('#imb').value);
+  if ($('#probe').checked || $('#pdt').value) { p.set('probe', '1'); p.set('probe_years', $('#py').value); }
+  if ($('#pdt').value) p.set('probe_dT', $('#pdt').value);
   if ($('#win').value !== 'auto') p.set('window_years', $('#win').value);
   p.set('which', $('#which').value);
   if ($('#nt').value) p.set('N_target', $('#nt').value);
@@ -365,7 +373,9 @@ function ax(title, extra) {
 const CFG = { displaylogo: false, responsive: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
 
 function focus(d, i) {             // is annual index i in the 'recent' view?
-  if (state.span === 'full' || !d.window) return true;
+  if (state.span === 'full') return true;
+  if (d.probe) return d.years[i] >= d.years[d.years.length - 1] - 20;   // probe: the recent run
+  if (!d.window) return true;
   let w0 = d.window[0] - Math.max(5, Math.round(0.25 * (d.window[1] - d.window[0])));
   if (d.jumps.length) w0 = Math.min(w0, d.jumps[0].year - 15);   // keep pre-jump context
   return d.years[i] >= w0;
@@ -606,13 +616,35 @@ function plotAccel(d) {
 
 
 // ================================================================ ocean (som_ocean)
+function probeCard(d) {
+  const P = d.probe, ok = P.somtp_dT !== null, lr = P.lambda_recent || {};
+  const reasons = (P.reasons || []).map(r => `<li class="bad">${r}</li>`).join('');
+  const warns = (P.warnings || []).map(r => `<li class="warn">${r}</li>`).join('');
+  return `<section class="card advice">
+    <div class="headline">
+      <span class="big">${ok ? `Probe somtp ${sgn(P.somtp_dT, 2)} K` : 'No probe'}</span>
+      <span class="what">${d.case} · probe mode — maps the trajectory, not sized to an equilibrium ·
+        ${P.sizing === 'explicit' ? 'explicit size' : `${P.config.probe_years} yr of the recent trend`}</span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">TS</div><div class="v">${fmt(P.TS_now, 1)}${ok ? ' → ' + fmt(P.TS_after, 1) : ''}</div><div class="s">trend ${sgn(P.trend_K_per_yr, 3)} K/yr</div></div>
+      <div class="tile"><div class="k">${d.imbalance} now</div><div class="v">${sgn(P.N_now)}</div><div class="s">last ${P.config.recent_years} yr, σ ${fmt(P.sigma_N)} W/m²</div></div>
+      <div class="tile"><div class="k">recent λ</div><div class="v">${lr.value !== undefined ? sgn(lr.value) : '–'}</div><div class="s">± ${fmt(lr.se)} W/m²/K (two ${P.config.recent_years}-yr periods)</div></div>
+      <div class="tile"><div class="k">λ the probe resolves</div><div class="v">${ok ? '≥ ' + fmt(P.lambda_detectable) : '–'}</div><div class="s">after ${P.config.recent_years} settled years</div></div>
+      <div class="tile"><div class="k">overshoots if λ &gt;</div><div class="v">${P.lambda_overshoot ? fmt(P.lambda_overshoot) : '–'}</div><div class="s">then the equilibrium is bracketed</div></div>
+    </div>
+    ${reasons || warns ? `<ul class="msgs">${reasons}${warns}</ul>` : ''}
+    ${d.jumps.length ? oceanJumpTable(d) : ''}
+  </section>`;
+}
+
 function renderOcean(d) {
   const a = d.advice, jump = a.somtp_dT !== null, G = d.gregory;
   const reasons = a.reasons.map(r => `<li class="bad">${r}</li>`).join('');
   const warns = a.warnings.map(r => `<li class="warn">${r}</li>`).join('');
   const coord = d.imbalance === 'energy_bot' ? 'N<sub>surf</sub>' : 'N<sub>TOA</sub>';
-  $('#main').innerHTML = `
-  <section class="card advice">
+  $('#main').innerHTML = (d.probe ? probeCard(d) : '') + `
+  <section class="card advice"${d.probe ? ' style="display:none"' : ''}>
     <div class="headline">
       <span class="big">${jump ? `Jump somtp ${sgn(a.somtp_dT, 2)} K` : 'Do not jump'}</span>
       <span class="what">${d.case} · ice-free (ocean) regime · data through model year ${a.model_year} ·
@@ -728,6 +760,18 @@ function plotGregory(d) {
         showarrow: true, arrowhead: 2, arrowsize: 1.2, arrowwidth: 2, arrowcolor: css('--series-3'), text: '' });
     }
     [G.now, G.after, G.eq].forEach(p => { if (p) { fx.push(p.N); fy.push(p.TS); } });
+  }
+  const P = d.probe;
+  if (P && P.fan) {
+    const F = P.fan;
+    tr.push({ type: 'scatter', mode: 'lines+markers', name: 'probe outcomes (by λ)', x: F.N, y: F.N.map(() => F.TS),
+      customdata: F.lambda, marker: { size: 5, color: F.lambda, colorscale: [[0, css('--critical')], [1, css('--series-3')]] },
+      line: { color: css('--series-3'), width: 1 },
+      hovertemplate: 'λ %{customdata:.2f} W/m²/K → N %{x:.2f} at TS %{y:.2f}<extra>probe outcome</extra>' });
+    ann.push({ x: P.N_now, y: P.TS_after, ax: P.N_now, ay: P.TS_now, xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
+      showarrow: true, arrowhead: 2, arrowsize: 1.2, arrowwidth: 2, arrowcolor: css('--series-3'), text: '' });
+    ann.push({ x: F.N[0], y: F.TS, xref: 'x', yref: 'y', text: 'λ = 0 (runaway)', showarrow: false, yshift: 12, font: { size: 11, color: css('--critical') } });
+    fx.push(P.N_now, F.N[F.N.length - 1]); fy.push(P.TS_now, F.TS);
   }
   d.jumps.forEach(j => {
     if (!j.advice.line) return;
@@ -853,14 +897,15 @@ function labels() {
   $('#mf_v').textContent = '×' + Number($('#mf').value).toFixed(2);
   $('#mdt_v').textContent = '±' + Number($('#mdt').value).toFixed(1) + ' K';
   $('#hr_v').textContent = Number($('#hr').value).toFixed(2);
+  $('#py_v').textContent = $('#py').value + ' yr of trend';
 }
 function changed() {
   labels();
   clearTimeout(t0); t0 = setTimeout(() => { loadCase(); loadCases(); }, 180);
 }
-['#nf', '#mf', '#mdt', '#hr'].forEach(s => $(s).addEventListener('input', changed));
-['#win', '#which', '#nt', '#since', '#imb'].forEach(s => $(s).addEventListener('change', changed));
-$('#reset').onclick = () => { for (const [k, v] of Object.entries(DEFAULTS)) $('#' + k).value = v; changed(); };
+['#nf', '#mf', '#mdt', '#hr', '#py'].forEach(s => $(s).addEventListener('input', changed));
+['#win', '#which', '#nt', '#since', '#imb', '#probe', '#pdt'].forEach(s => $(s).addEventListener('change', changed));
+$('#reset').onclick = () => { for (const [k, v] of Object.entries(DEFAULTS)) $('#' + k).value = v; $('#probe').checked = false; changed(); };
 $('#theme').onclick = () => {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches;
   const cur = document.documentElement.dataset.theme || (dark ? 'dark' : 'light');

@@ -212,7 +212,12 @@ exocam-accelerate check TRENDDIR CASE --rundir RUN
 exocam-accelerate somtp-map --rundir RUN -o somtp.nc          # somtp on the lat-lon grid
 ```
 
-The advisor refuses when the run still has ice, when TS does not rise as the
+`--probe` (or `--probe-dt K`) instead steps TS ahead by the recent trend ×
+`--probe-years` to *map* the trajectory where the Gregory line is not yet
+constrained; `check` then measures λ and the implied equilibrium from the
+probe's lever arm, and fails a probe after which the imbalance grows.
+
+The Gregory advisor refuses when the run still has ice, when TS does not rise as the
 imbalance falls, when the current state is off the fitted line (a steepening
 relation — sensitivity rising with temperature), or when the jump would be
 smaller than the year-to-year TS scatter. The domain file is read from the run

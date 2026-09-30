@@ -285,3 +285,60 @@ def test_domain_from_docn_ocn_in(case, tmp_path, capsys):
     assert restart.find_docn_domain(run) == dom
     rc = main(["somtp-map", "--rundir", str(run), "-o", str(tmp_path / "m2.nc")])
     assert rc == 0
+
+
+# ---------------------------------------------------------------- probe check
+from exocam_accelerate.check import check_ocean_probe  # noqa: E402
+from exocam_accelerate.ocean_advise import ProbeConfig, probe_ocean  # noqa: E402
+
+
+def probe_log(dT, tau=40.0):
+    adv = probe_ocean(truncate(gregory_columns(tau=tau, noise=0.02), JUMP_YEAR - 1),
+                      CASE, ProbeConfig(probe_dT=dT))
+    assert adv["somtp_dT"] is not None, adv["reasons"]
+    return {"plugin": "som_ocean", "jump_model_year": JUMP_YEAR, "somtp_dT": dT,
+            "somtp_dT_applied_mean": dT, "advice": adv}
+
+
+def probe_run(dT, years_after, tau=40.0, **kw):
+    log = probe_log(dT, tau)
+    cols = gregory_columns(years=JUMP_YEAR - 1 + years_after, tau=tau, jump_year=JUMP_YEAR,
+                           dT=dT, noise=0.02, **kw)
+    return check_any(cols, log), log
+
+
+def test_probe_reads_lambda_and_side():
+    res, _ = probe_run(5.0, 8)
+    assert res.verdict is Verdict.PASS, res.reasons
+    assert res.metrics["lambda"] == pytest.approx(-1 / -1.2 * 1.0, rel=0.15)   # -1/c1
+    assert res.metrics["TS_eq"] == pytest.approx(350.0, abs=1.0)
+    assert res.metrics["bracketed"] == 0.0                   # still below equilibrium
+
+
+def test_probe_overshoot_is_bracketed():
+    res, _ = probe_run(25.0, 8, tau=40.0)
+    assert res.verdict is Verdict.PASS, res.reasons
+    assert res.metrics["bracketed"] == 1.0
+    assert res.metrics["TS_eq"] == pytest.approx(350.0, abs=1.5)
+
+
+def test_probe_runaway_signature_fails():
+    # energy_bot rises after the warm probe: no restoring feedback
+    res, _ = probe_run(5.0, 8, N_offset_after=12.0)
+    assert res.verdict is Verdict.FAIL
+    assert any("runaway" in r for r in res.reasons)
+
+
+def test_probe_waits_then_not_landed():
+    res, _ = probe_run(5.0, 3)
+    assert res.verdict is Verdict.WAIT
+    log = probe_log(5.0)
+    res = check_ocean_probe(gregory_columns(years=JUMP_YEAR + 6, tau=40.0, noise=0.02), log)
+    assert res.verdict is Verdict.FAIL and any("did not land" in r for r in res.reasons)
+
+
+def test_probe_advice_passes_preflight(case):
+    run, arch, path, _ = case
+    adv = probe_log(3.0)["advice"]
+    f = runstate.preflight(path, arch, None, adv)
+    assert not runstate.blocked(f), [x.message for x in f if x.level == "block"]

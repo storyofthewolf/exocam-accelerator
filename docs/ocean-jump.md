@@ -105,6 +105,34 @@ docn.r (`rpointer.ocn` names it), pristine backup and JSON log in
 `restore`. Near-freezing cells (possible ice) and masked cells are never
 changed.
 
+## Probe mode (decided with the user, 2026-09-30)
+
+The user disagreed with refusing D4/D5: flattening of the imbalance does not
+imply a runaway, and a warm perturbation maps the trajectory far more cheaply
+than running hundreds more years. The data agree that the recent relation is
+simply unconstrained: over the last 10 yr D4's `energy_bot` changes by
+−0.1 ± 0.9 W/m² while TS rises 3 K (λ = 0.03–0.10 ± 0.5), D5's λ is 0.2–1.0.
+
+`advise-ocean --probe` therefore offers a jump that is *not* sized to an
+equilibrium: TS is stepped ahead by the run's own recent trend ×
+`--probe-years` (15), i.e. forward Euler behind the settled time-domain
+trustworthiness gate and the hard clip (or `--probe-dt` explicitly, which
+skips the gate — D2's ±2 K swings fail it). It reports the smallest λ the
+check will resolve after 5 settled years and the λ above which the probe
+overshoots (`N_now/ΔT`). At year 50: D4 +4.9 K (resolves λ ≥ 0.45, overshoots
+if λ > 0.46), D5 +8.1 K (λ ≥ 0.18); a +3 K probe on D2 only resolves λ ≳ 3
+(σ of energy_bot ≈ 7 W/m²).
+
+The probe check (`check.check_ocean_probe`) compares the settled post-probe
+years with the 5 pre-probe years — the lever arm the natural run lacks:
+λ = −ΔN/ΔTS with its standard error; FAIL if the imbalance *grew* in the
+direction of the probe (no restoring feedback: the runaway signature — roll
+back) or the probe never landed; PASS once λ is significant, with
+TS_eq = TS_post + N_post/λ and the side (still short of equilibrium, or
+overshot = bracketed); WAIT while the response is inside the noise (PASS with
+an upper bound on |λ| after 12 settled years). The viewer's probe toggle draws
+the outcome fan: where the post-probe state lands for each λ.
+
 ## Post-jump check (`check`, som_ocean logs)
 
 - landed: first post-jump annual TS moved by the expected
@@ -118,9 +146,7 @@ changed.
 ## Not done / open
 
 - No real ocean jump has been made yet; the first one is the Tier-1/2 test.
-  D4/D5 are the cases that would benefit, and the advisor refuses them for
-  now; revisit as the runs lengthen, or decide on a curvature-aware form (the
-  steepening is the rising sensitivity, not noise).
+  D4/D5 are the probe candidates (the Gregory advisor refuses them).
 - Atmosphere jumps (for thick H2 envelopes). `cam.r` `PT` is the scaled
   virtual potential temperature T_v/pkz (CAM FV `dyn_comp.F90`); scaling it
   by `1 + ΔT/T` per level at fixed `DELP` shifts T without a hybrid reboot, but

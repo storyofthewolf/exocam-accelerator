@@ -144,3 +144,28 @@ def test_config_validation():
         OceanAdvisorConfig(heat_ratio=0.5)
     with pytest.raises(ValueError):
         OceanAdvisorConfig(imbalance="FLNT")
+
+
+# ---------------------------------------------------------------- probe mode
+from exocam_accelerate.ocean_advise import OCEAN_PROBE_SCHEMA_VERSION, ProbeConfig, probe_ocean  # noqa: E402
+
+
+def test_probe_steps_by_recent_trend():
+    cols = truncate(gregory_columns(tau=40.0, noise=0.02), 40)
+    d = probe_ocean(cols, "synth")
+    assert d["schema_version"] == OCEAN_PROBE_SCHEMA_VERSION and d["mode"] == "probe"
+    assert d["somtp_dT"] == pytest.approx(d["trend_K_per_yr"] * 15.0, rel=0.05)
+    assert d["TS_after"] == pytest.approx(d["TS_now"] + d["somtp_dT"])
+    assert d["lambda_detectable"] > 0
+
+
+def test_probe_clip_explicit_and_refusals():
+    cols = truncate(gregory_columns(tau=40.0, noise=0.02), 40)
+    assert probe_ocean(cols, "s", ProbeConfig(max_dT=1.0))["somtp_dT"] == pytest.approx(1.0)
+    d = probe_ocean(cols, "s", ProbeConfig(probe_dT=-2.0))
+    assert d["somtp_dT"] == -2.0 and d["sizing"] == "explicit"
+    assert probe_ocean(truncate(gregory_columns(icefrac=0.1), 40), "s")["somtp_dT"] is None
+    # a flat, noisy run: the probe would drown in the noise
+    flat = gregory_columns(years=150, noise=0.5)
+    d = probe_ocean(flat, "s", ProbeConfig(probe_dT=0.3))
+    assert d["somtp_dT"] is None and any("sigmas" in r for r in d["reasons"])
