@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
 
 from .advise import ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION
+from .ocean_advise import OCEAN_ADVICE_SCHEMA_VERSION, OCEAN_PATTERN_SCHEMA_VERSION
 from .restart import (
     DATE_RE,
     STATE_DIR,
@@ -46,7 +47,8 @@ _HIST_RE = re.compile(r"\.(\d{4})-(\d{2})(?:-\d{2}(?:-\d{5})?)?\.nc$")
 #: Advice schema versions this build understands. ``preflight`` refuses advice
 #: whose ``schema_version`` is missing or not in this set (feasibility-review
 #: finding, Stage 0 item 5).
-KNOWN_ADVICE_SCHEMA_VERSIONS = {ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION}
+KNOWN_ADVICE_SCHEMA_VERSIONS = {ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION,
+                                OCEAN_ADVICE_SCHEMA_VERSION, OCEAN_PATTERN_SCHEMA_VERSION}
 
 
 def active_jobs() -> Optional[Set[str]]:
@@ -119,11 +121,12 @@ def _rpointer_dates(rundir: Path) -> dict:
     return out
 
 
-def preflight(cice_r, archive: Optional[Path] = None,
+def preflight(restart_file, archive: Optional[Path] = None,
               probe: Optional[JobProbe] = active_jobs,
               advice: Optional[dict] = None,
               allow_no_archive: bool = False) -> List[Finding]:
-    """Checks before editing ``cice_r`` in place. Any "block" finding refuses.
+    """Checks before editing ``restart_file`` (a cice.r or docn.r) in place.
+    Any "block" finding refuses.
 
     ``archive`` is the case's short-term archive root (DOUT_S_ROOT, i.e. the
     directory holding ``rest/``). ``probe`` = None skips the SLURM check.
@@ -134,7 +137,7 @@ def preflight(cice_r, archive: Optional[Path] = None,
     ``rpointer.*`` file must be present in the run directory itself (the
     rundir-sourced rollback path ``runstate.plan_rollback`` falls back to).
     """
-    cice_r = Path(cice_r).resolve()
+    cice_r = Path(restart_file).resolve()
     rundir = cice_r.parent
     case = case_of(cice_r)
     date = restart_date(cice_r)

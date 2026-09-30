@@ -207,3 +207,142 @@ def check_jump(columns: Dict[str, np.ndarray], jump_log: dict,
     if bad_N or bad_T or melting or not ts_ok:
         return done(Verdict.FAIL)
     return done(Verdict.PASS)
+
+
+# ---------------------------------------------------------------------------
+# som_ocean jump (docn.r somtp; ocean_advise.py)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class OceanCheckConfig:
+    settle_years: int = 2
+    min_years: int = 3
+    #: W/m2 floor on the tolerance for N off the Gregory line (energy_bot is
+    #: noisier than energy_top: ~1-3 W/m2 interannual in the hot runs)
+    tol_N: float = 0.75
+    #: the jump "did not land" when the first post-jump year moved TS by less
+    #: than this fraction of the expected change (after the pre-jump drift)...
+    min_land_fraction: float = 0.3
+    #: ...and the shortfall is larger than this many interannual TS sigmas
+    land_sigmas: float = 2.0
+    early_fail_factor: float = 3.0
+    baseline_years: int = 5
+
+    def __post_init__(self) -> None:
+        for name in ("settle_years", "min_years", "baseline_years"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+
+
+def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
+                     start_year: int = 1,
+                     config: OceanCheckConfig = OceanCheckConfig()) -> CheckResult:
+    """Score the run after a somtp jump against the advice in ``jump_log``.
+
+    * landed:  the first post-jump annual TS moved by the expected
+               ``somtp_dT / heat_ratio`` (net of the pre-jump drift); the
+               ratio observed is reported as ``heat_ratio_implied`` —
+               the measurement the next jump's ``--heat-ratio`` needs;
+    * on-line: settled-year N ~ (TS - c0)/c1, the Gregory line the jump relied
+               on, relative to the run's offset from it just before the jump;
+    * sanity:  non-finite data in the post-jump years is a FAIL, never a PASS.
+    """
+    advice = jump_log.get("advice") or {}
+    jump_year = int(jump_log["jump_model_year"])
+    greg = advice.get("gregory") or {}
+    try:
+        c0, c1 = greg["fits"]["linear"]["params"]
+        TS_before = float(advice["TS_now"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("jump log carries no Gregory fit (advice.gregory.fits.linear); "
+                         "was the jump made with --delta-t alone?")
+    if not greg.get("accepted"):
+        raise ValueError("the jump log's Gregory reference was not accepted")
+    cfg = advice.get("config") or {}
+    imbalance = cfg.get("imbalance", "energy_bot")
+    heat_ratio = float(cfg.get("heat_ratio") or 1.0)
+    applied = float(jump_log.get("somtp_dT_applied_mean", jump_log.get("somtp_dT")))
+    dTS_exp = applied / heat_ratio
+
+    t, N = _annual(columns, imbalance, "native")
+    _, T = _annual(columns, "TS", "native")
+    years = model_years(t, start_year)
+    post = years >= jump_year
+    settled = years >= jump_year + config.settle_years
+    n_post, n_set = int(post.sum()), int(settled.sum())
+    reasons: List[str] = []
+    metrics: Dict[str, float] = {"dTS_expected": dTS_exp, "somtp_dT_applied": applied}
+
+    def done(verdict):
+        return CheckResult(verdict, reasons, jump_year, n_post, n_set, metrics)
+
+    if n_post == 0:
+        reasons.append(f"no complete model year since the jump at year {jump_year} "
+                       f"in the trend data (latest is {int(years[-1])})")
+        return done(Verdict.WAIT)
+    if not (np.all(np.isfinite(N[post])) and np.all(np.isfinite(T[post]))):
+        reasons.append("non-finite TS or N in the post-jump years: the run or its "
+                       "trend output is broken")
+        return done(Verdict.FAIL)
+
+    pre = (years < jump_year) & (years >= jump_year - 10)
+    sig_T = _noise(T[pre]) if pre.sum() >= 3 else _noise(T[post])
+    sig_N = _noise(N[pre]) if pre.sum() >= 3 else _noise(N[post])
+    # the no-jump first year: the pre-jump trend over the last baseline years
+    last_pre = (years < jump_year) & (years >= jump_year - config.baseline_years)
+    drift = 0.0
+    if last_pre.sum() >= 3:
+        drift = float(np.polyfit(t[last_pre], T[last_pre], 1)[0])  # K/yr, one year's worth
+    # the jump's own effect relaxes during that first year (one box, tau):
+    # its annual mean is tau*(1 - exp(-1/tau)) of the step
+    tau = advice.get("tau_years")
+    m = float(tau * (1.0 - np.exp(-1.0 / tau))) if tau and tau > 0 else 1.0
+
+    # landed? (did the edited somtp reach the model?)
+    moved = (float(T[post][0]) - TS_before - drift) / m
+    metrics.update(TS_first=float(T[post][0]), TS_before=TS_before, drift_K_per_yr=drift,
+                   dTS_first=moved, land_fraction=moved / dTS_exp if dTS_exp else float("nan"))
+    if moved * dTS_exp > 0:
+        metrics["heat_ratio_implied"] = applied / moved
+    if (moved / dTS_exp < config.min_land_fraction
+            and abs(dTS_exp - moved) > config.land_sigmas * sig_T):
+        reasons.append(f"jump did not land: first post-jump TS moved {moved:+.2f} K "
+                       f"(net of drift) vs {dTS_exp:+.2f} expected; was the edited "
+                       f"docn.r the one the run read?")
+        return done(Verdict.FAIL)
+
+    if n_set == 0:
+        reasons.append(f"jump landed; in the {config.settle_years}-yr adjustment "
+                       f"period ({n_post} yr so far)")
+        return done(Verdict.WAIT)
+
+    last = (years < jump_year) & (years >= jump_year - config.baseline_years)
+    bias = float(np.mean(N[last] - (T[last] - c0) / c1)) if last.any() else 0.0
+    N_line = (T[settled] - c0) / c1
+    dN = float(np.mean(N[settled] - N_line)) - bias
+    tol_N = max(config.tol_N, 2.0 * sig_N / np.sqrt(n_set))
+    metrics.update(N_obs=float(N[settled].mean()), N_line=float(N_line.mean()), dN=dN,
+                   tol_N=tol_N, N_bias_before=bias, TS_obs=float(T[settled].mean()),
+                   TS_expected=float(advice.get("TS_after") or np.nan))
+    bad_N = abs(dN) > tol_N
+    if bad_N:
+        reasons.append(f"N is off the Gregory line by {dN:+.2f} W/m2 (tolerance "
+                       f"{tol_N:.2f}): the run is not following the relation the "
+                       f"jump was sized on")
+    if n_set < config.min_years:
+        if abs(dN) > config.early_fail_factor * tol_N:
+            return done(Verdict.FAIL)
+        reasons.append(f"{n_set} of {config.min_years} settled years so far")
+        return done(Verdict.WAIT)
+    return done(Verdict.FAIL if bad_N else Verdict.PASS)
+
+
+def check_any(columns, jump_log: dict, start_year: int = 1,
+              settle_years: Optional[int] = None,
+              min_years: Optional[int] = None) -> CheckResult:
+    """Dispatch on the jump log's plugin (aqua_ice when unrecorded)."""
+    kw = {k: v for k, v in (("settle_years", settle_years), ("min_years", min_years))
+          if v is not None}
+    if jump_log.get("plugin") == "som_ocean":
+        return check_ocean_jump(columns, jump_log, start_year, OceanCheckConfig(**kw))
+    return check_jump(columns, jump_log, start_year, CheckConfig(**kw))

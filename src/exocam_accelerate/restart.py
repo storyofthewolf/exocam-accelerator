@@ -84,11 +84,16 @@ def restart_date(path) -> str:
     return "-".join(m[-1])
 
 
+#: restart kinds this layer edits in place
+KINDS = (".cice.r.", ".docn.r.")
+
+
 def case_of(path) -> str:
     name = Path(path).name
-    if ".cice.r." not in name:
-        raise ValueError(f"{name} is not a cice.r file")
-    return name.split(".cice.r.")[0]
+    for kind in KINDS:
+        if kind in name:
+            return name.split(kind)[0]
+    raise ValueError(f"{name} is not a cice.r or docn.r file")
 
 
 def first_model_year(date: str) -> int:
@@ -109,6 +114,24 @@ def locate_cice_restart(rundir) -> Path:
         raise FileNotFoundError(f"rpointer.ice names {name}, which does not exist")
     if ".cice.r." not in path.name:
         raise ValueError(f"rpointer.ice names {path.name}, not a cice.r file")
+    return path
+
+
+def locate_docn_restart(rundir) -> Path:
+    """The docn.r file rpointer.ocn names (its first line; the second is the
+    stream restart docn.rs1.bin)."""
+    rundir = Path(rundir)
+    rp = rundir / "rpointer.ocn"
+    if not rp.is_file():
+        raise FileNotFoundError(f"no rpointer.ocn in {rundir}")
+    lines = [l.strip() for l in rp.read_text().splitlines() if l.strip()]
+    if not lines:
+        raise ValueError(f"{rp} is empty")
+    path = (rundir / lines[0]).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"rpointer.ocn names {lines[0]}, which does not exist")
+    if ".docn.r." not in path.name:
+        raise ValueError(f"rpointer.ocn names {path.name}, not a docn.r file")
     return path
 
 
@@ -360,3 +383,273 @@ def write_taper_file(path, mask: TaperMask, peak: Optional[float] = None) -> str
 def read_taper_file(path) -> Dict[str, np.ndarray]:
     _require_netcdf()
     return _read(path, list(TAPER_FIELDS))
+
+
+# ---------------------------------------------------------------------------
+# som_ocean: docn.r somtp (som_ocean.py)
+# ---------------------------------------------------------------------------
+
+PATTERN_SUFFIX = ".pattern.nc"
+
+
+def read_somtp(path) -> np.ndarray:
+    _require_netcdf()
+    return _read(path, ["somtp"])["somtp"].astype(float)
+
+
+def find_docn_domain(rundir) -> Optional[Path]:
+    """The docn domain file named in the run directory's ``docn_ocn_in``
+    (``domainfile = '...'``); None when absent or unreadable."""
+    nml = Path(rundir) / "docn_ocn_in"
+    if not nml.is_file():
+        return None
+    m = re.search(r"domainfile\s*=\s*['\"]([^'\"]+)['\"]", nml.read_text())
+    if not m:
+        return None
+    p = Path(m.group(1))
+    return p if p.is_file() else None
+
+
+def read_ocean_grid(domain_file) -> Dict[str, np.ndarray]:
+    """``mask``, ``area``, ``lat``, ``lon`` as (nj, ni) from a docn domain file.
+
+    Accepts a CESM domain file (``xc``/``yc``/``mask``/``area`` on (nj, ni)) or
+    a SOM forcing file like ``pop_frc`` (1-D ``xc(lon)``, ``yc(lat)``). The
+    grid must be the docn domain: its nj*ni must equal docn.r's gsize.
+    """
+    _require_netcdf()
+    with netCDF4.Dataset(domain_file) as ds:
+        ds.set_auto_mask(False)
+        missing = [n for n in ("mask", "area", "xc", "yc") if n not in ds.variables]
+        if missing:
+            raise KeyError(f"{domain_file}: missing {missing} (need a docn domain "
+                           f"or pop_frc file)")
+        mask = np.array(ds.variables["mask"][:], dtype=float)
+        area = np.array(ds.variables["area"][:], dtype=float)
+        xc = np.array(ds.variables["xc"][:], dtype=float)
+        yc = np.array(ds.variables["yc"][:], dtype=float)
+    mask, area = np.squeeze(mask), np.squeeze(area)
+    if mask.ndim != 2:
+        raise ValueError(f"{domain_file}: mask is {mask.shape}, expected 2-D")
+    nj, ni = mask.shape
+    xc, yc = np.squeeze(xc), np.squeeze(yc)
+    if xc.ndim == 1 and yc.ndim == 1:
+        yc, xc = np.meshgrid(yc, xc, indexing="ij")
+    if xc.shape != (nj, ni) or yc.shape != (nj, ni):
+        raise ValueError(f"{domain_file}: coordinates {xc.shape}/{yc.shape} do not "
+                         f"match the {nj}x{ni} mask")
+    return {"mask": mask, "area": area, "lat": yc, "lon": xc}
+
+
+def apply_ocean_jump(path, somtp_dT: float, provenance: Optional[dict] = None,
+                     dry_run: bool = False, pattern_file=None,
+                     domain_file=None) -> JumpRecord:
+    """Add ``somtp_dT`` (K) to somtp in a docn.r file, in place, with backup.
+
+    With ``pattern_file`` (from ``write_pattern_file``) each cell gets
+    ``somtp_dT * weight`` (area mean ``somtp_dT``); the map is copied beside
+    the log. ``domain_file`` supplies the ocean mask (masked cells untouched)
+    and the area weights for the report; without it every non-frozen cell
+    gets the increment. Same backup / log / re-apply-from-pristine rules as
+    ``apply_ice_jump``; the record's ``ice_factor`` slot holds the increment.
+    """
+    from .som_ocean import SomOceanPlugin, TK_FRZ_SW, area_mean, check_dT
+
+    _require_netcdf()
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if ".docn.r." not in path.name:
+        raise ValueError(f"{path.name} is not a docn.r file")
+    backup, log = backup_path(path), log_path(path)
+    if backup.exists():
+        if is_jumped(backup):
+            raise RuntimeError(f"{backup} is marked as already jumped; it is not "
+                               f"a pristine backup — refusing")
+        source = backup
+    else:
+        if is_jumped(path):
+            raise RuntimeError(f"{path.name} was already jumped but its pristine "
+                               f"backup {backup} is missing — refusing to shift twice")
+        source = path
+
+    check_dT(somtp_dT)
+    before = {"somtp": read_somtp(source)}
+    n = before["somtp"].size
+    ocean = area = None
+    if domain_file is not None:
+        g = read_ocean_grid(domain_file)
+        if g["mask"].size != n:
+            raise ValueError(f"domain {Path(domain_file).name} has {g['mask'].size} "
+                             f"cells, somtp has {n}")
+        ocean = g["mask"].ravel() > 0
+        area = g["area"].ravel()
+    delta = float(somtp_dT)
+    pattern_copy = None
+    if pattern_file is not None:
+        weight = read_pattern_file(pattern_file)["weight"].ravel()
+        if weight.size != n:
+            raise ValueError(f"pattern map {Path(pattern_file).name} has "
+                             f"{weight.size} cells, somtp has {n}")
+        delta = check_dT(somtp_dT * weight, "per-cell somtp increment")
+        pattern_copy = state_dir(path) / (path.name + PATTERN_SUFFIX)
+
+    plugin = SomOceanPlugin()
+    jumped = plugin.apply_delta(before, delta)
+    after, report = plugin.enforce_constraints(before, jumped, ocean)
+    d = after["somtp"] - before["somtp"]
+    open_sea = before["somtp"] > TK_FRZ_SW + 0.05
+    if ocean is not None:
+        open_sea &= ocean
+    mean_dT = (area_mean(d, area, open_sea) if area is not None
+               else float(d[open_sea].mean()) if open_sea.any() else 0.0)
+
+    date = restart_date(path)
+    meta = {
+        "tool": "exocam-accelerate",
+        "plugin": plugin.name,
+        "time_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "case": case_of(path),
+        "restart_file": path.name,
+        "restart_date": date,
+        "jump_model_year": first_model_year(date),
+        "somtp_dT": float(somtp_dT),
+        "somtp_dT_applied_mean": float(mean_dT),
+        "cell_dT_min": float(d.min()),
+        "cell_dT_max": float(d.max()),
+        "fields": ["somtp"],
+        "pristine_backup": str(backup),
+        "domain_file": str(Path(domain_file).resolve()) if domain_file else None,
+    }
+    if pattern_file is not None:
+        meta["pattern"] = {"source": str(Path(pattern_file).resolve()),
+                           "sha256": file_sha256(pattern_file),
+                           "copy": str(pattern_copy)}
+    if dry_run:
+        return JumpRecord(path, backup, log, float(somtp_dT), 1.0, False,
+                          dict(report.adjustments), meta)
+
+    backup.parent.mkdir(exist_ok=True)
+    if pattern_copy is not None:
+        shutil.copy2(pattern_file, pattern_copy)
+    if source is path:
+        shutil.copy2(path, backup)
+    else:
+        shutil.copy2(backup, path)
+    with netCDF4.Dataset(path, "r+") as ds:
+        ds.set_auto_mask(False)
+        var = ds.variables["somtp"]
+        var[:] = after["somtp"].astype(var.dtype)
+        ds.setncattr(ATTR, json.dumps(meta))
+    check = read_somtp(path)
+    if not np.array_equal(check, after["somtp"].astype(check.dtype)):
+        raise RuntimeError(f"verification failed for somtp in {path}; restore with "
+                           f"the pristine copy {backup}")
+    log.write_text(json.dumps(dict(meta, adjustments=dict(report.adjustments),
+                                   advice=provenance), indent=2))
+    return JumpRecord(path, backup, log, float(somtp_dT), 1.0, True,
+                      dict(report.adjustments), meta)
+
+
+def archived_docn_r(archive, case: str, date: str) -> Path:
+    p = Path(archive) / "rest" / date / f"{case}.docn.r.{date}.nc"
+    if not p.is_file():
+        raise FileNotFoundError(f"no archived docn.r for {date}: {p}")
+    return p
+
+
+def build_ocean_pattern(archive, case: str, date: str, domain_file,
+                        baseline_years: int = 10, config=None):
+    """Warming pattern from the pristine archived docn.r at ``date`` and
+    ``baseline_years`` earlier. Returns ``(pattern, grid, sources)``."""
+    from .som_ocean import PatternConfig, pattern_weights, to_grid
+
+    if baseline_years <= 0:
+        raise ValueError(f"baseline_years must be positive, got {baseline_years!r}")
+    now = archived_docn_r(archive, case, date)
+    old = archived_docn_r(archive, case, shift_date(date, baseline_years))
+    for p in (now, old):
+        if is_jumped(p):
+            raise RuntimeError(f"{p.name} is marked as jumped: the pattern baseline "
+                               f"must be pristine archived restarts")
+    grid = read_ocean_grid(domain_file)
+    nj, ni = grid["mask"].shape
+    t_now = to_grid(read_somtp(now), nj, ni)
+    t_old = to_grid(read_somtp(old), nj, ni)
+    area = np.where(grid["mask"] > 0, grid["area"], 0.0)
+    pat = pattern_weights(t_old, t_now, float(baseline_years), area,
+                          grid["mask"] > 0, config or PatternConfig())
+    sources = {str(p): file_sha256(p) for p in (old, now, Path(domain_file))}
+    return pat, grid, sources
+
+
+PATTERN_FIELDS = ("weight", "rate", "somtp_now", "area", "lat", "lon")
+
+
+def write_pattern_file(path, pattern, grid, somtp_dT: Optional[float] = None) -> str:
+    """Save the pattern on (nj, ni) with lat/lon (and, with ``somtp_dT``, the
+    per-cell increment); returns its sha256."""
+    _require_netcdf()
+    with netCDF4.Dataset(path, "w") as ds:
+        nj, ni = pattern.weight.shape
+        ds.createDimension("nj", nj)
+        ds.createDimension("ni", ni)
+        vals = {"weight": (pattern.weight, "1"), "rate": (pattern.rate, "K/yr"),
+                "somtp_now": (pattern.somtp_now, "K"), "area": (pattern.area, "1"),
+                "lat": (grid["lat"], "degrees_north"), "lon": (grid["lon"], "degrees_east")}
+        for name, (arr, units) in vals.items():
+            v = ds.createVariable(name, "f8", ("nj", "ni"))
+            v[:] = arr
+            v.units = units
+        if somtp_dT is not None:
+            v = ds.createVariable("somtp_dT", "f8", ("nj", "ni"))
+            v[:] = somtp_dT * pattern.weight
+            v.units = "K"
+        ds.setncattr(ATTR, json.dumps(dict(pattern.summary(), somtp_dT=somtp_dT)))
+    return file_sha256(path)
+
+
+def read_pattern_file(path) -> Dict[str, np.ndarray]:
+    _require_netcdf()
+    return _read(path, list(PATTERN_FIELDS))
+
+
+def write_somtp_map(docn_r, domain_file, out) -> Path:
+    """docn.r somtp -> a lat-lon netCDF (``somtp(lat, lon)`` in K, plus
+    ``mask``/``area``) that ncview, Panoply or the viewer can show. For a
+    rectilinear docn grid the coordinates are written 1-D."""
+    from .som_ocean import to_grid
+
+    grid = read_ocean_grid(domain_file)
+    nj, ni = grid["mask"].shape
+    somtp = to_grid(read_somtp(docn_r), nj, ni)
+    rect = (np.allclose(grid["lat"], grid["lat"][:, :1]) and
+            np.allclose(grid["lon"], grid["lon"][:1, :]))
+    with netCDF4.Dataset(out, "w") as ds:
+        if rect:
+            ds.createDimension("lat", nj)
+            ds.createDimension("lon", ni)
+            la = ds.createVariable("lat", "f8", ("lat",))
+            la[:] = grid["lat"][:, 0]
+            la.units = "degrees_north"
+            lo = ds.createVariable("lon", "f8", ("lon",))
+            lo[:] = grid["lon"][0, :]
+            lo.units = "degrees_east"
+            dims = ("lat", "lon")
+        else:
+            ds.createDimension("nj", nj)
+            ds.createDimension("ni", ni)
+            dims = ("nj", "ni")
+            for name, units in (("lat", "degrees_north"), ("lon", "degrees_east")):
+                v = ds.createVariable(name, "f8", dims)
+                v[:] = grid[name]
+                v.units = units
+        for name, arr, units in (("somtp", somtp, "K"), ("mask", grid["mask"], "1"),
+                                 ("area", grid["area"], "1")):
+            v = ds.createVariable(name, "f8", dims)
+            v[:] = arr
+            v.units = units
+        ds.variables["somtp"].long_name = "slab-ocean temperature (docn.r somtp)"
+        ds.source = str(Path(docn_r).resolve())
+        ds.domain_file = str(Path(domain_file).resolve())
+    return Path(out)

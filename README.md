@@ -191,6 +191,35 @@ current imbalance (`--n-fraction 0.5`), target clipped to 5x the window's
 N-range, ice factor capped at 1.5 (`--max-ice-factor`); hard bound 2.0 whatever
 the flags say. Snow is left alone unless `--snow-factor` is given.
 
+## Jumping a hot, ice-free case (`advise-ocean`)
+
+For slab-ocean runs with no sea ice whose slow drift is the surface
+temperature (e.g. thick CO2 atmospheres at 340–375 K). The jump shifts the
+slab temperature `somtp` in `docn.r` (the file `rpointer.ocn` names), sized
+from a Gregory line `TS = c0 + c1·N` fitted against the **surface** imbalance
+`energy_bot`: that is the slab's own equilibrium condition, whereas
+`energy_top` also carries the atmosphere's energy leak (~10 W/m² in the 4-bar
+atlasfu runs). Details and the evidence: `docs/ocean-jump.md`.
+
+```
+exocam-accelerate advise-ocean TRENDDIR CASE --json adv.json   # --rundir RUN picks up a past jump
+exocam-accelerate pattern --advice adv.json --archive ARCH \
+    --domain-file DOMAIN --json adv_p.json                     # optional: measured warming pattern
+exocam-accelerate jump --rundir RUN --advice adv.json --archive ARCH --dry-run
+exocam-accelerate jump --rundir RUN --advice adv.json --archive ARCH
+# resubmit a short continuation, regenerate trends, then:
+exocam-accelerate check TRENDDIR CASE --rundir RUN
+exocam-accelerate somtp-map --rundir RUN -o somtp.nc          # somtp on the lat-lon grid
+```
+
+The advisor refuses when the run still has ice, when TS does not rise as the
+imbalance falls, when the current state is off the fitted line (a steepening
+relation — sensitivity rising with temperature), or when the jump would be
+smaller than the year-to-year TS scatter. The domain file is read from the run
+directory's `docn_ocn_in` when `--domain-file` is not given. `--heat-ratio`
+(default 1) enlarges the increment to cover heat the atmosphere takes back
+from the ocean; `check` reports the ratio the first post-jump year implies.
+
 ## Viewing a case (`exocam-accelerate view`)
 
 ```
@@ -204,7 +233,12 @@ reasons), the phase-space picture N vs hi with the fitted conduction law and
 the jump's landing point, TS vs N, the model years a jump skips (Stefan
 growth on the model clock, post-jump data in equivalent years), time series
 with fit window and predicted levels, and each jump's `check` verdict.
-Controls re-run `advise` live (what-if); nothing is written. The page
+Hot, ice-free cases get the ocean layout instead: TS against `energy_bot`
+with the Gregory line (and every fit window tried), the same years against
+`energy_top` (the offset is the leak), `energy_bot` vs `energy_top`, the
+one-box projection a jump short-cuts, and lat-lon maps of any `*.latlon.nc`
+(`somtp-map`) or `*.pattern.nc` (`pattern`) files in `DIR`.
+Controls re-run the advisor live (what-if); nothing is written. The page
 refreshes when files in `DIR` change. Fetching new trend data from the HPC is
 a separate step.
 
@@ -230,8 +264,11 @@ Experimental. Pure-computation safeguards, the Tier-0 offline hindcast
 harness, the phase-space jump advisor, and the `aqua_ice` restart writer
 (cice.r, in place with backup, continuation), the post-jump `check`, pre-flight
 safety checks and whole-set `rollback` are implemented and tested (152 unit
-tests). The advisor is validated offline on 15 cold cases; the first real
-jumps are the Tier-1/2 test of the restart path. Run orchestration (submitting
-and polling segments) and ocean (`somtp`) / land plugins are not implemented.
+tests at the time). The advisor is validated offline on 15 cold cases, and the
+first real ice jumps (grp4 pt01/pt03, 2026-09-28) passed. The `som_ocean`
+(docn.r somtp) jump for hot, ice-free runs is implemented and validated
+offline on atlasfu D1–D5; no real ocean jump has been made yet. Run
+orchestration (submitting and polling segments), land and atmosphere plugins
+are not implemented.
 
 **Use with care and caution — model behavior is not always straightforward.**

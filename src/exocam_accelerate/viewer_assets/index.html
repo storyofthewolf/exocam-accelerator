@@ -105,6 +105,8 @@ table.jt th { text-align: left; font-weight: 600; color: var(--muted); font-size
 table.jt td { border-bottom: 1px solid var(--border); padding: 5px 6px; vertical-align: top; }
 details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
 .error { color: var(--critical); font-weight: 600; }
+body.ocean .ice-only, body:not(.ocean) .ocean-only { display: none; }
+.maps { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
 .empty { color: var(--muted); padding: 40px; text-align: center; }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
@@ -130,9 +132,21 @@ details summary { cursor: pointer; color: var(--text-secondary); font-size: 13px
       <label>fraction of N to remove <b id="nf_v"></b></label>
       <input type="range" id="nf" min="0.05" max="0.95" step="0.05" value="0.5">
     </div>
-    <div class="ctl">
+    <div class="ctl ice-only">
       <label>max ice factor (clip) <b id="mf_v"></b></label>
       <input type="range" id="mf" min="1" max="2" step="0.05" value="1.5">
+    </div>
+    <div class="ctl ocean-only">
+      <label>max somtp increment (clip) <b id="mdt_v"></b></label>
+      <input type="range" id="mdt" min="0.5" max="15" step="0.5" value="10">
+    </div>
+    <div class="ctl ocean-only">
+      <label>heat ratio (somtp / TS change) <b id="hr_v"></b></label>
+      <input type="range" id="hr" min="1" max="2.5" step="0.05" value="1">
+    </div>
+    <div class="ctl ocean-only">
+      <label>phase-space coordinate</label>
+      <select id="imb"><option value="energy_bot">energy_bot (surface — slab equilibrium)</option><option value="energy_top">energy_top (TOA — includes the leak)</option></select>
     </div>
     <div class="ctl">
       <label>fit window · column</label>
@@ -160,7 +174,7 @@ const $ = s => document.querySelector(s);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (x, d = 2) => (x === null || x === undefined || Number.isNaN(x)) ? '–' : Number(x).toFixed(d);
 const sgn = (x, d = 2) => (x === null || x === undefined) ? '–' : (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d);
-const DEFAULTS = { nf: '0.5', mf: '1.5', win: 'auto', which: 'int2', nt: '', since: '' };
+const DEFAULTS = { nf: '0.5', mf: '1.5', mdt: '10', hr: '1', imb: 'energy_bot', win: 'auto', which: 'int2', nt: '', since: '' };
 const state = { case: null, data: null, stamp: null, xmode: 'hi', eqtime: false, tvar: 'TS', span: 'recent', prefix: '' };
 
 try { const t = localStorage.getItem('sv-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -170,6 +184,9 @@ function params() {
   const p = new URLSearchParams();
   p.set('n_fraction', $('#nf').value);
   p.set('max_ice_factor', $('#mf').value);
+  p.set('max_dT', $('#mdt').value);
+  p.set('heat_ratio', $('#hr').value);
+  p.set('imbalance', $('#imb').value);
   if ($('#win').value !== 'auto') p.set('window_years', $('#win').value);
   p.set('which', $('#which').value);
   if ($('#nt').value) p.set('N_target', $('#nt').value);
@@ -186,6 +203,7 @@ function statusChip(verdict) {
 function adviceChip(row) {
   if (row.error) return `<span class="chip">error</span>`;
   if (row.refused) return `<span class="chip"><span class="dot" style="background:var(--muted)"></span>no jump</span>`;
+  if (row.regime === 'ocean') return `<span class="chip"><span class="dot" style="background:var(--series-2)"></span>${sgn(row.somtp_dT, 1)} K</span>`;
   return `<span class="chip"><span class="dot" style="background:var(--series-3)"></span>×${fmt(row.ice_factor, 2)}</span>`;
 }
 
@@ -235,6 +253,8 @@ async function loadCase() {
 // ---------------------------------------------------------------- render
 function render() {
   const d = state.data; if (!d) return;
+  document.body.classList.toggle('ocean', d.regime === 'ocean');
+  if (d.regime === 'ocean') return renderOcean(d);
   const a = d.advice;
   const jump = a.ice_factor !== null;
   const reasons = a.reasons.map(r => `<li class="bad">${r}</li>`).join('');
@@ -584,18 +604,262 @@ function plotAccel(d) {
     yaxis: ax('ice thickness hi (m)'), annotations: ann, hovermode: 'closest' }), CFG);
 }
 
+
+// ================================================================ ocean (som_ocean)
+function renderOcean(d) {
+  const a = d.advice, jump = a.somtp_dT !== null, G = d.gregory;
+  const reasons = a.reasons.map(r => `<li class="bad">${r}</li>`).join('');
+  const warns = a.warnings.map(r => `<li class="warn">${r}</li>`).join('');
+  const coord = d.imbalance === 'energy_bot' ? 'N<sub>surf</sub>' : 'N<sub>TOA</sub>';
+  $('#main').innerHTML = `
+  <section class="card advice">
+    <div class="headline">
+      <span class="big">${jump ? `Jump somtp ${sgn(a.somtp_dT, 2)} K` : 'Do not jump'}</span>
+      <span class="what">${d.case} · ice-free (ocean) regime · data through model year ${a.model_year} ·
+        fit ${a.which}, ${fmt(a.window_years, 0)} yr against ${d.imbalance}${a.since_year ? ` · post-jump since ${a.since_year}` : ''}
+        ${a.somtp_dT_clipped ? ` · clipped from ${sgn(a.somtp_dT_raw, 2)} K` : ''}</span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">${coord} now</div><div class="v">${sgn(a.N_now)}</div><div class="s">on the line ${sgn(a.N_now_fit)} W/m²</div></div>
+      <div class="tile"><div class="k">${coord} target → after</div><div class="v">${sgn(a.N_target)}</div><div class="s">after jump ${sgn(a.N_after)} W/m²</div></div>
+      <div class="tile"><div class="k">TS</div><div class="v">${fmt(a.TS_now, 1)}${a.TS_after ? ' → ' + fmt(a.TS_after, 1) : ''}</div><div class="s">K, global mean</div></div>
+      <div class="tile"><div class="k">TS at equilibrium</div><div class="v">${G ? fmt(G.c0, 1) : '–'}</div><div class="s">${G ? `line: TS = ${fmt(G.c0, 1)} ${sgn(G.c1, 2)}·N, r ${fmt(G.corr, 3)}` : 'no trusted line'}</div></div>
+      <div class="tile"><div class="k">years skipped</div><div class="v">${a.years_skipped ? '~' + fmt(a.years_skipped, 0) : '–'}</div><div class="s">τ ${a.tau_years ? fmt(a.tau_years, 1) + ' yr' : '–'} (one box)</div></div>
+      <div class="tile"><div class="k">heat capacity</div><div class="v">${a.C_eff_m_seawater ? '~' + fmt(a.C_eff_m_seawater, 0) + ' m' : '–'}</div><div class="s">of sea water, from ∑N vs TS</div></div>
+      <div class="tile"><div class="k">energy leak</div><div class="v">${a.leak && a.leak.mean !== null ? sgn(a.leak.mean, 1) : '–'}</div><div class="s">TOA − surface, W/m²</div></div>
+    </div>
+    ${reasons || warns ? `<ul class="msgs">${reasons}${warns}</ul>` : ''}
+    ${d.jumps.length ? oceanJumpTable(d) : ''}
+  </section>
+
+  <div class="bar">Show
+    <span class="seg"><button data-span="recent" class="${state.span === 'recent' ? 'on' : ''}">fit window &amp; after</button><button data-span="full" class="${state.span === 'full' ? 'on' : ''}">whole run</button></span>
+    <span class="hint">double-click any plot to autoscale</span></div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="ph"><h3>Phase space: surface temperature vs energy imbalance</h3></div>
+      <div class="cap">Annual means shaded by model year, against ${d.imbalance}. Dashed = the Gregory line the advice uses (★ = its equilibrium, N = 0); thin dotted = every fit window tried. A jump moves the state along the line from ● now to ◆ after. Grey ○ = the same years against energy_top: the horizontal gap is the atmosphere's energy leak.</div>
+      <div id="p_greg" class="plot" style="height:430px"></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><h3>Where the TOA imbalance goes</h3></div>
+      <div class="cap">energy_bot (what warms the slab) against energy_top. On the 1:1 line all TOA heat reaches the ocean; a constant offset is a leak, not storage.</div>
+      <div id="p_part" class="plot" style="height:430px"></div>
+    </div>
+  </div>
+  <div class="panel" style="margin-bottom:12px">
+    <div class="ph"><h3>What the jump buys: TS on the model clock</h3></div>
+    <div class="cap">Blue = the run. Grey dotted = one-box relaxation to the line's equilibrium from now (τ from the heat capacity and the line's slope). Aqua = jumping now: TS set to the target at once, then relaxing; the arrow spans the model years skipped.</div>
+    <div id="p_proj" class="plot" style="height:340px"></div>
+  </div>
+  <div class="panel">
+    <div class="ph"><h3>Time series</h3></div>
+    <div class="cap">Thin = annual mean, thick = ${d.which} running mean. Shaded = fit window. Dashed verticals = past jumps.</div>
+    <div id="p_ts" class="plot" style="height:720px"></div>
+  </div>
+  ${d.maps && d.maps.length ? `<div class="panel" style="margin-top:12px"><div class="ph"><h3>Maps (docn.r somtp on the lat-lon grid)</h3></div>
+    <div class="cap">From <code>somtp-map</code> (*.latlon.nc) and <code>pattern</code> (*.pattern.nc) files in the directory.</div>
+    <div class="maps" id="maps"></div></div>` : ''}
+  <p class="hint">Files: ${(d.files || []).join(', ')}</p>`;
+  document.querySelectorAll('[data-span]').forEach(b => b.onclick = () => { state.span = b.dataset.span; render(); });
+  if (typeof Plotly === 'undefined') {
+    document.querySelectorAll('.plot').forEach(p => p.innerHTML = '<div class="empty">Plotly did not load (offline?)</div>');
+    return;
+  }
+  plotGregory(d); plotPartition(d); plotProjection(d); plotOceanSeries(d); plotMaps(d);
+}
+
+function oceanJumpTable(d) {
+  return `<table class="jt"><thead><tr><th>jump</th><th>somtp</th><th>predicted after</th><th>check</th><th>post / settled yrs</th><th>notes</th></tr></thead><tbody>` +
+    d.jumps.map(j => {
+      const c = j.check || {}, m = c.metrics || {};
+      return `<tr><td>year ${j.year}<br><span class="hint">${j.restart_date || ''}</span></td>
+        <td>${sgn(j.somtp_dT, 2)} K${j.patterned ? '<br><span class="hint">patterned</span>' : ''}</td>
+        <td>TS ${fmt(j.advice.TS_after, 2)} K, N ${sgn(j.advice.N_after)}${m.N_obs !== undefined ? `<br><span class="hint">observed N ${sgn(m.N_obs)}, off-line ${sgn(m.dN)} ± ${fmt(m.tol_N)}</span>` : ''}
+          ${m.heat_ratio_implied !== undefined ? `<br><span class="hint">implied heat ratio ${fmt(m.heat_ratio_implied, 2)}</span>` : ''}</td>
+        <td>${statusChip(c.verdict) || '–'}</td>
+        <td>${c.post_years ?? '–'} / ${c.settled_years ?? '–'}</td>
+        <td><ul class="msgs">${(c.reasons || []).map(r => `<li>${r}</li>`).join('')}</ul></td></tr>`;
+    }).join('') + '</tbody></table>';
+}
+
+function plotGregory(d) {
+  const S = d.series, N = S[d.imbalance], T = S.TS, G = d.gregory;
+  if (!N || !T) { $('#p_greg').innerHTML = '<div class="empty">needs TS and the imbalance series</div>'; return; }
+  const [pre, post] = split(d, { x: N.native, y: T.native });
+  const tr = [], ann = [];
+  if (d.imbalance === 'energy_bot' && S.energy_top) {
+    const [pt] = split(d, { x: S.energy_top.native, y: T.native });
+    const fx = [], fy = [];
+    pt.x.forEach((x, i) => { if (focus(d, d.years.indexOf(pt.yr[i]))) { fx.push(x); fy.push(pt.y[i]); } });
+    tr.push({ type: 'scatter', mode: 'markers', name: 'vs energy_top', x: fx, y: fy,
+      marker: { size: 6, symbol: 'circle-open', color: css('--muted') }, hovertemplate: 'N_TOA %{x:.2f}, TS %{y:.2f}<extra>vs energy_top</extra>' });
+  }
+  tr.push({ type: 'scatter', mode: 'markers', name: 'annual mean', x: pre.x, y: pre.y, customdata: pre.yr,
+    hovertemplate: 'year %{customdata}<br>N %{x:.2f} W/m²<br>TS %{y:.2f} K<extra></extra>',
+    marker: { size: 7, color: pre.yr, colorscale: [[0, css('--seq-lo')], [1, css('--seq-hi')]], line: { width: 1, color: css('--surface-1') },
+      colorbar: { title: { text: 'year', font: { size: 11 } }, thickness: 10, len: 0.6, tickfont: { color: css('--muted') } } } });
+  if (N.smooth && T.smooth) {
+    const [ps] = split(d, { x: N.smooth, y: T.smooth });
+    tr.push({ type: 'scatter', mode: 'lines', name: d.which + ' mean', x: ps.x, y: ps.y, line: { color: css('--series-1'), width: 2 }, hoverinfo: 'skip' });
+  }
+  if (post.x.length) tr.push({ type: 'scatter', mode: 'markers+lines', name: 'after jump', x: post.x, y: post.y, customdata: post.yr,
+    hovertemplate: 'year %{customdata}<br>N %{x:.2f}<br>TS %{y:.2f}<extra>after jump</extra>',
+    marker: { size: 8, color: css('--series-2'), line: { width: 1, color: css('--surface-1') } }, line: { color: css('--series-2'), width: 1 } });
+  (d.tried || []).forEach(w => {
+    if (G && w.window === d.advice.window_years && w.status === 'ok') return;
+    tr.push({ type: 'scatter', mode: 'lines', name: `${w.window} yr window (${w.status === 'ok' ? 'ok' : 'rejected'})`,
+      x: w.curve.N, y: w.curve.TS, line: { color: css('--muted'), width: 1, dash: 'dot' },
+      hovertemplate: `${w.window} yr: TS = ${fmt(w.c0, 1)} ${sgn(w.c1, 2)}·N<br>${w.status}<extra></extra>` });
+  });
+  const fx = [], fy = [];
+  d.years.forEach((_, i) => { if (focus(d, i)) { fx.push(N.native[i]); fy.push(T.native[i]); } });
+  if (G) {
+    tr.push({ type: 'scatter', mode: 'lines', name: 'Gregory line', x: G.curve.N, y: G.curve.TS,
+      line: { color: css('--text-secondary'), width: 2, dash: G.accepted ? 'dash' : 'dot' }, hovertemplate: 'line: N %{x:.2f} → TS %{y:.2f}<extra></extra>' });
+    tr.push({ type: 'scatter', mode: 'markers', name: 'equilibrium (N = 0)', x: [0], y: [G.c0],
+      marker: { size: 14, symbol: 'star', color: css('--warning'), line: { width: 1, color: css('--surface-1') } }, hovertemplate: 'equilibrium TS %{y:.2f} K<extra></extra>' });
+    tr.push({ type: 'scatter', mode: 'markers', name: 'now', x: [G.now.N], y: [G.now.TS],
+      marker: { size: 12, color: css('--text-primary'), line: { width: 2, color: css('--surface-1') } }, hovertemplate: 'now: N %{x:.2f}, TS %{y:.2f}<extra></extra>' });
+    if (G.after) {
+      tr.push({ type: 'scatter', mode: 'markers', name: 'after jump', x: [G.after.N], y: [G.after.TS],
+        marker: { size: 13, symbol: 'diamond', color: css('--series-3'), line: { width: 2, color: css('--surface-1') } }, hovertemplate: 'after jump: N %{x:.2f}, TS %{y:.2f}<extra></extra>' });
+      ann.push({ x: G.after.N, y: G.after.TS, ax: G.now.N, ay: G.now.TS, xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
+        showarrow: true, arrowhead: 2, arrowsize: 1.2, arrowwidth: 2, arrowcolor: css('--series-3'), text: '' });
+    }
+    [G.now, G.after, G.eq].forEach(p => { if (p) { fx.push(p.N); fy.push(p.TS); } });
+  }
+  d.jumps.forEach(j => {
+    if (!j.advice.line) return;
+    const [c0, c1] = j.advice.line, ns = [j.advice.N_now_fit, 0].filter(x => x !== null);
+    const lo = Math.min(...ns) - 0.5, hi = Math.max(...ns) + 0.5;
+    tr.push({ type: 'scatter', mode: 'lines', name: `line at jump ${j.year}`, x: [lo, hi], y: [c0 + c1 * lo, c0 + c1 * hi],
+      line: { color: css('--series-2'), width: 1.5, dash: 'dot' }, hoverinfo: 'skip' });
+  });
+  const xa = ax(`${d.imbalance} (W/m²)`), ya = ax('TS (K)');
+  if (state.span === 'recent') { xa.range = rng(fx); ya.range = rng(fy); }
+  Plotly.react('p_greg', tr, base({ xaxis: xa, yaxis: ya, annotations: ann, hovermode: 'closest' }), CFG);
+}
+
+function plotPartition(d) {
+  const S = d.series;
+  if (!S.energy_top || !S.energy_bot) { $('#p_part').innerHTML = '<div class="empty">needs energy_top and energy_bot</div>'; return; }
+  const [pre, post] = split(d, { x: S.energy_top.native, y: S.energy_bot.native });
+  const tr = [{ type: 'scatter', mode: 'markers', name: 'annual mean', x: pre.x, y: pre.y, customdata: pre.yr,
+    hovertemplate: 'year %{customdata}<br>TOA %{x:.2f}<br>surface %{y:.2f}<extra></extra>',
+    marker: { size: 6, color: pre.yr, colorscale: [[0, css('--seq-lo')], [1, css('--seq-hi')]], line: { width: 1, color: css('--surface-1') } } }];
+  if (post.x.length) tr.push({ type: 'scatter', mode: 'markers', name: 'after jump', x: post.x, y: post.y, marker: { size: 7, color: css('--series-2') } });
+  const all = pre.x.concat(pre.y).filter(Number.isFinite);
+  const lo = Math.min(...all, 0), hi = Math.max(...all, 0);
+  tr.push({ type: 'scatter', mode: 'lines', name: '1:1', x: [lo, hi], y: [lo, hi], line: { color: css('--axis'), width: 1.5, dash: 'dash' }, hoverinfo: 'skip' });
+  const L = d.advice.leak && d.advice.leak.mean;
+  if (L !== null && L !== undefined) tr.push({ type: 'scatter', mode: 'lines', name: `1:1 − leak (${sgn(L, 1)})`,
+    x: [lo, hi], y: [lo - L, hi - L], line: { color: css('--series-2'), width: 1.5, dash: 'dot' }, hoverinfo: 'skip' });
+  const fx = [], fy = [];
+  d.years.forEach((_, i) => { if (focus(d, i)) { fx.push(S.energy_top.native[i]); fy.push(S.energy_bot.native[i]); } });
+  const xa = ax('energy_top, TOA (W/m²)'), ya = ax('energy_bot, into the slab (W/m²)');
+  if (state.span === 'recent') { xa.range = rng(fx); ya.range = rng(fy); }
+  Plotly.react('p_part', tr, base({ xaxis: xa, yaxis: ya, hovermode: 'closest' }), CFG);
+}
+
+function plotProjection(d) {
+  const T = d.series.TS, G = d.gregory, a = d.advice;
+  if (!T) { $('#p_proj').innerHTML = '<div class="empty">no TS series</div>'; return; }
+  const X = d.years.map(y => y + 0.5), tr = [], ann = [];
+  const keep = (arr) => arr.filter((_, i) => focus(d, i));
+  tr.push({ x: keep(X), y: keep(T.native), mode: 'lines', name: 'run (annual)', opacity: 0.5, line: { color: css('--series-1'), width: 1 } });
+  if (T.smooth) tr.push({ x: keep(X), y: keep(T.smooth), mode: 'lines', name: 'run (' + d.which + ')', line: { color: css('--series-1'), width: 2.2 } });
+  let xmax = X[X.length - 1] + 20;
+  if (G && G.projection) {
+    const P = G.projection, last = X[X.length - 1];
+    tr.push({ x: P.year, y: P.TS, mode: 'lines', name: 'unaccelerated (one box)', line: { color: css('--muted'), width: 1.8, dash: 'dot' },
+      hovertemplate: 'one box: yr %{x:.0f}, %{y:.2f} K<extra></extra>' });
+    tr.push({ x: [P.year[0], P.year[P.year.length - 1]], y: [G.c0, G.c0], mode: 'lines', name: 'equilibrium (line)', line: { color: css('--warning'), width: 1, dash: 'dash' } });
+    xmax = P.year[P.year.length - 1];
+    if (P.TS_jumped && a.years_skipped) {
+      tr.push({ x: [last].concat(P.year), y: [a.TS_now].concat(P.TS_jumped), mode: 'lines', name: `jump now ${sgn(a.somtp_dT, 2)} K`,
+        line: { color: css('--series-3'), width: 2.4 }, hovertemplate: 'if jumped now: %{y:.2f} K<extra></extra>' });
+      ann.push({ x: last + a.years_skipped, y: a.TS_after, ax: last, ay: a.TS_after, xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
+        showarrow: true, arrowhead: 2, arrowside: 'end+start', arrowwidth: 1.5, arrowcolor: css('--series-3'), text: '' });
+      ann.push({ x: last + a.years_skipped / 2, y: a.TS_after, yshift: 12, xref: 'x', yref: 'y', showarrow: false,
+        text: `≈ ${Math.round(a.years_skipped)} model years skipped`, font: { size: 12, color: css('--text-primary') } });
+    }
+  }
+  d.jumps.forEach(j => ann.push({ x: j.year, y: 1, xref: 'x', yref: 'paper', text: `jump ${sgn(j.somtp_dT, 1)} K`, showarrow: false,
+    yanchor: 'bottom', xanchor: 'left', font: { size: 11, color: css('--text-secondary') } }));
+  const shapes = d.jumps.map(j => ({ type: 'line', xref: 'x', yref: 'paper', x0: j.year, x1: j.year, y0: 0, y1: 1,
+    line: { color: css('--series-2'), width: 1.5, dash: 'dash' } }));
+  Plotly.react('p_proj', tr, base({ xaxis: ax('model year'), yaxis: ax('TS (K)'), annotations: ann, shapes, hovermode: 'closest' }), CFG);
+}
+
+function plotOceanSeries(d) {
+  const S = d.series;
+  const rows = [['energy_top', 'N TOA (W/m²)'], ['energy_bot', 'N surface (W/m²)'], ['leak', 'TOA − surface'], ['TS', 'TS (K)'], ['ICEFRAC', 'ICEFRAC']]
+    .filter(([k]) => S[k]);
+  const n = rows.length, gap = 0.035, h = (1 - gap * (n - 1)) / n;
+  const X = d.years.map(y => y + 0.5);
+  const layout = base({ hovermode: 'x unified', showlegend: false, margin: { l: 70, r: 14, t: 16, b: 40 } });
+  const tr = [], shapes = [];
+  rows.forEach(([k, label], i) => {
+    const yx = i === 0 ? 'y' : 'y' + (i + 1), top = 1 - i * (h + gap);
+    layout[i === 0 ? 'yaxis' : 'yaxis' + (i + 1)] = ax(label, { domain: [top - h, top] });
+    tr.push({ x: X, y: S[k].native, yaxis: yx, name: k + ' annual', mode: 'lines', line: { color: css('--series-1'), width: 1 }, opacity: 0.45, hovertemplate: '%{y:.3f}' });
+    if (S[k].smooth) tr.push({ x: X, y: S[k].smooth, yaxis: yx, name: k + ' ' + d.which, mode: 'lines', line: { color: css('--series-1'), width: 2.2 }, hovertemplate: '%{y:.3f}' });
+    if (k === 'TS' && d.advice.TS_after) tr.push({ x: [X[X.length - 1], X[X.length - 1] + 15], y: [d.advice.TS_after, d.advice.TS_after], yaxis: yx,
+      mode: 'lines', name: 'if jumped now', line: { color: css('--series-3'), width: 2, dash: 'dash' } });
+  });
+  if (d.window) shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: d.window[0], x1: d.window[1] + 1, y0: 0, y1: 1,
+    fillcolor: css('--series-1'), opacity: 0.07, line: { width: 0 }, layer: 'below' });
+  d.jumps.forEach(j => shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: j.year, x1: j.year, y0: 0, y1: 1,
+    line: { color: css('--series-2'), width: 1.5, dash: 'dash' } }));
+  layout.xaxis = ax('model year', { anchor: 'y' + (n > 1 ? n : ''), showspikes: true, spikecolor: css('--axis'), spikethickness: 1, spikemode: 'across' });
+  if (state.span === 'recent') {
+    const i0 = d.years.findIndex((_, i) => focus(d, i));
+    layout.xaxis.range = [X[Math.max(i0, 0)] - 1, X[X.length - 1] + 16];
+    rows.forEach(([k], i) => {
+      const v = []; d.years.forEach((_, j) => { if (focus(d, j)) { v.push(S[k].native[j]); if (S[k].smooth) v.push(S[k].smooth[j]); } });
+      layout[i === 0 ? 'yaxis' : 'yaxis' + (i + 1)].range = rng(v);
+    });
+  }
+  layout.shapes = shapes;
+  Plotly.react('p_ts', tr, layout, CFG);
+}
+
+function plotMaps(d) {
+  const box = $('#maps'); if (!box || !d.maps) return;
+  const panels = [];
+  const hasLatlon = d.maps.some(m => 'somtp' in m.fields);
+  d.maps.forEach((m, mi) => Object.keys(m.fields).forEach(f => {
+    if (f === 'somtp_now' && hasLatlon) return;          // same field as the somtp-map one
+    panels.push([m, f, `map_${mi}_${f}`]);
+  }));
+  box.innerHTML = panels.map(([m, f, id]) => `<div><div class="hint">${m.file} · <b>${f}</b></div><div id="${id}" class="plot" style="height:300px"></div></div>`).join('');
+  const units = { somtp: 'K', somtp_now: 'K', somtp_dT: 'K', weight: '', rate: 'K/yr' };
+  panels.forEach(([m, f, id]) => {
+    const z = m.fields[f].flat().filter(Number.isFinite);
+    const div = ['somtp_dT', 'rate'].includes(f) && Math.min(...z) < 0 && Math.max(...z) > 0;
+    Plotly.react(id, [{ type: 'heatmap', x: m.lon, y: m.lat, z: m.fields[f],
+      colorscale: div ? [[0, css('--series-1')], [0.5, css('--surface-2')], [1, css('--series-2')]] : [[0, css('--seq-lo')], [1, css('--seq-hi')]],
+      zmid: div ? 0 : undefined, colorbar: { title: { text: units[f] || '', font: { size: 11 } }, thickness: 10, tickfont: { color: css('--muted') } },
+      hovertemplate: 'lon %{x:.1f}, lat %{y:.1f}: %{z:.3f}<extra></extra>' }],
+      base({ xaxis: ax('longitude'), yaxis: ax('latitude'), margin: { l: 50, r: 10, t: 10, b: 40 } }), CFG);
+  });
+}
+
 // ---------------------------------------------------------------- controls
 let t0 = null;
 function labels() {
   $('#nf_v').textContent = Number($('#nf').value).toFixed(2);
   $('#mf_v').textContent = '×' + Number($('#mf').value).toFixed(2);
+  $('#mdt_v').textContent = '±' + Number($('#mdt').value).toFixed(1) + ' K';
+  $('#hr_v').textContent = Number($('#hr').value).toFixed(2);
 }
 function changed() {
   labels();
   clearTimeout(t0); t0 = setTimeout(() => { loadCase(); loadCases(); }, 180);
 }
-['#nf', '#mf'].forEach(s => $(s).addEventListener('input', changed));
-['#win', '#which', '#nt', '#since'].forEach(s => $(s).addEventListener('change', changed));
+['#nf', '#mf', '#mdt', '#hr'].forEach(s => $(s).addEventListener('input', changed));
+['#win', '#which', '#nt', '#since', '#imb'].forEach(s => $(s).addEventListener('change', changed));
 $('#reset').onclick = () => { for (const [k, v] of Object.entries(DEFAULTS)) $('#' + k).value = v; changed(); };
 $('#theme').onclick = () => {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches;

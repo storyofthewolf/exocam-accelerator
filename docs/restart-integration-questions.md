@@ -353,3 +353,13 @@ From CESM 1.2.1 `scripts/ccsm_utils/Tools/st_archive.sh` (read-only):
 
 O6 is therefore settled as: in-place edit of the run-directory copy, pristine
 backup + jump log in `run/exocam_accelerate/`, rollback from the archive.
+
+## 8. Decisions taken 2026-09-30 (hot, ice-free ocean jump)
+
+`somtp` plugin (O5 residual answered in part): in-place edit of the
+run-directory `docn.r` + continuation, same bookkeeping as §7a. ExoCAM
+`docn_comp_mod.F90` confirms `somtp` is in K, stored lon-fastest on the docn
+domain, and copied to `So_t` on the first coupling step after a restart. Only
+`somtp` is edited; `docn.rs1.bin` is stream bookkeeping. Design and evidence:
+`docs/ocean-jump.md`. The atmosphere is not edited; `cam.r` `PT` = T_v/pkz is a
+possible continuation path for atmosphere jumps (open, user decision).
