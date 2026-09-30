@@ -314,6 +314,48 @@ def cmd_pattern(args) -> int:
     return 0
 
 
+def cmd_atm_profile(args) -> int:
+    from .atmos import ProfileConfig
+    from .ocean_advise import couple_advice
+    from .restart import build_atm_profile, find_docn_domain, first_model_year, write_profile_file
+
+    advice = json.loads(Path(args.advice).read_text())
+    if advice.get("somtp_dT") is None:
+        print("advice says do not jump:", *advice.get("reasons", []), sep="\n  ")
+        return 1
+    case = advice["case"]
+    date = args.date or f"{int(advice['model_year']) + 1:04d}-01-01-00000"
+    if first_model_year(date) - 1 != int(advice["model_year"]):
+        print(f"warning: advice data run through model year {advice['model_year']}, "
+              f"the restart is {date}")
+    domain = args.domain_file or (find_docn_domain(args.rundir) if args.rundir else None)
+    top = "auto" if args.top in (None, "auto") else float(args.top)
+    prof, sources = build_atm_profile(args.archive, case, date, args.baseline_years,
+                                      domain, ProfileConfig(top=top))
+    out_json = Path(args.json)
+    stem = out_json.name[:-5] if out_json.name.endswith(".json") else out_json.name
+    pfile = out_json.with_name(stem + ".atmprofile.nc")
+    summary = dict(prof.summary(), restart_date=date, sources=sources,
+                   domain_file=str(Path(domain).resolve()) if domain else None)
+    out = couple_advice(advice, summary)
+    sha = write_profile_file(pfile, prof, out["somtp_dT"])
+    out["atmosphere"].update(profile_file=str(pfile.resolve()), profile_sha256=sha)
+    s_ = out["atmosphere"]
+    print(f"case {case}   restart {date}   profile from {args.baseline_years} yr "
+          f"(surface warmed {s_['dTS_baseline']:+.2f} K)")
+    print(f"per K of surface warming: {s_['gain_surface']:.2f} K at the lowest level, "
+          f"max {s_['gain_max']:.2f}, mass-weighted {s_['gain_mass_weighted']:.2f}; "
+          f"applied up to {s_['top_pressure_Pa'] / 100:.1f} hPa (level {s_['top_level']})")
+    print(f"COUPLED jump: TS {out['TS_now']:.2f} -> {out['TS_after']:.2f} K "
+          f"(somtp {out['somtp_dT']:+.2f} K instead of {out['somtp_dT_ocean_only']:+.2f} "
+          f"ocean-only; atmosphere T per level x{out['somtp_dT']:+.2f} K, q at fixed RH)")
+    if out.get("years_skipped"):
+        print(f"  skips ~{out['years_skipped']:.0f} model years")
+    out_json.write_text(json.dumps(out, indent=2))
+    print(f"wrote {out_json} and {pfile}")
+    return 0
+
+
 def cmd_somtp_map(args) -> int:
     from .restart import find_docn_domain, locate_docn_restart, write_somtp_map
     src = Path(args.docn_r) if args.docn_r else locate_docn_restart(args.rundir)
@@ -354,6 +396,9 @@ def cmd_jump(args) -> int:
     if args.advice:
         advice = json.loads(Path(args.advice).read_text())
     ocean = _is_ocean(advice) or args.delta_t is not None or bool(args.docn_r)
+    if advice is not None and advice.get("atmosphere") and args.cam_r and not args.rundir \
+            and not args.docn_r:
+        raise ValueError("coupled jump: give --rundir (or --docn-r and --cam-r)")
     if ocean:
         return _jump_ocean(args, advice)
     if advice is not None:
@@ -429,7 +474,8 @@ def _jump_ocean(args, advice) -> int:
     from .restart import apply_ocean_jump, file_sha256, restart_date
     from .runstate import active_jobs, blocked, preflight
 
-    if args.cice_r or args.ice_factor is not None or args.taper_file:
+    if (getattr(args, "cice_r", None) or args.ice_factor is not None
+            or args.taper_file):
         raise ValueError("ocean jump: --cice-r / --ice-factor / --taper-file do not apply")
     if advice is not None:
         if not _is_ocean(advice):
@@ -469,6 +515,13 @@ def _jump_ocean(args, advice) -> int:
     if blocked(findings):
         print("refusing to jump: resolve the BLOCK items above")
         return EXIT_BLOCKED
+    atm = None
+    if advice is not None and advice.get("atmosphere"):
+        atm = _prepare_atmosphere(args, advice, path, archive)
+        _print_findings(atm["findings"])
+        if blocked(atm["findings"]):
+            print("refusing to jump: resolve the BLOCK items above")
+            return EXIT_BLOCKED
     rec = apply_ocean_jump(path, dT, advice, dry_run=True, pattern_file=pattern_file,
                            domain_file=domain_file)
     m = rec.metadata
@@ -485,6 +538,18 @@ def _jump_ocean(args, advice) -> int:
         print(f"domain   {domain_file}")
     for name, msg in rec.adjustments.items():
         print(f"  {name:>6}: {msg}")
+    if atm is not None:
+        from .restart import apply_atmos_jump
+        arec = apply_atmos_jump(atm["path"], atm["dT"], atm["constants"], advice,
+                                dry_run=True, profile_file=atm["profile"])
+        r = arec.metadata["report"]
+        print(f"cam.r    {atm['path']}")
+        print(f"         T +{arec.metadata['dT_surface_level']:.2f} K at the lowest level "
+              f"(max {r['dT_max']:+.2f}), q at fixed RH: +{r['vapor_added_kg_m2']:.0f} "
+              f"kg/m2 vapor ({r['vapor_increase_fraction']:+.0%}), PS "
+              f"{r['dPS_mean_Pa'] / 100:+.1f} hPa, energy "
+              f"{r['dTE_mean_J_m2'] / 3.156e7:+.1f} W yr/m2 "
+              f"(constants reproduce TEOUT to {r['te_mismatch_max']:.1e})")
     if args.dry_run:
         print("dry run: nothing written")
         return 0
@@ -492,8 +557,21 @@ def _jump_ocean(args, advice) -> int:
         if input("write this jump? [y/N] ").strip().lower() != "y":
             print("aborted")
             return 1
-    rec = apply_ocean_jump(path, dT, advice, pattern_file=pattern_file,
-                           domain_file=domain_file)
+    if atm is not None:
+        from .restart import apply_atmos_jump, restore
+        arec = apply_atmos_jump(atm["path"], atm["dT"], atm["constants"], advice,
+                                profile_file=atm["profile"])
+        print(f"cam.r written and verified; jump log {arec.log}")
+        try:
+            rec = apply_ocean_jump(path, dT, advice, pattern_file=pattern_file,
+                                   domain_file=domain_file)
+        except Exception:
+            restore(atm["path"], retire_log="failed")
+            print("docn.r edit failed: cam.r restored from its pristine backup")
+            raise
+    else:
+        rec = apply_ocean_jump(path, dT, advice, pattern_file=pattern_file,
+                               domain_file=domain_file)
     print(f"written and verified; jump log {rec.log}")
     if probe is not None:
         jobs = probe()
@@ -503,6 +581,47 @@ def _jump_ocean(args, advice) -> int:
     print("next: resubmit a SHORT continuation segment (CONTINUE_RUN=TRUE), then "
           "regenerate trends and run 'exocam-accelerate check'")
     return 0
+
+
+def _prepare_atmosphere(args, advice, docn_path, archive) -> dict:
+    """Locate, pre-flight and size the cam.r half of a coupled jump."""
+    from .restart import (atm_constants_from_log, file_sha256, is_jumped,
+                          locate_cam_restart, read_profile_file, restart_date)
+    from .runstate import Finding
+
+    a = advice["atmosphere"]
+    rundir = docn_path.parent
+    cam = Path(args.cam_r) if getattr(args, "cam_r", None) else locate_cam_restart(rundir)
+    findings = []
+    if restart_date(cam) != restart_date(docn_path):
+        findings.append(Finding("block", f"{cam.name} and {docn_path.name} are at "
+                                         f"different dates"))
+    if a.get("restart_date") != restart_date(cam):
+        findings.append(Finding("block", f"the atmosphere profile was built for "
+                                         f"{a.get('restart_date')}, cam.r is "
+                                         f"{restart_date(cam)}"))
+    pfile = Path(getattr(args, "profile_file", None) or a.get("profile_file") or "")
+    if not pfile.is_file():
+        raise FileNotFoundError(f"coupled advice: profile {pfile} not found "
+                                f"(pass --profile-file)")
+    if file_sha256(pfile) != a.get("profile_sha256"):
+        raise RuntimeError(f"{pfile.name} does not match the sha256 in the advice")
+    if archive is not None:
+        arch = Path(archive) / "rest" / restart_date(cam) / cam.name
+        if not arch.is_file():
+            findings.append(Finding("block", f"no archived {cam.name}: no rollback "
+                                             f"source for the atmosphere"))
+        elif is_jumped(arch):
+            findings.append(Finding("block", f"the archived {cam.name} is jumped"))
+        else:
+            findings.append(Finding("ok", f"pristine archived {cam.name}"))
+    constants, logf = atm_constants_from_log(getattr(args, "atm_log", None) or rundir)
+    findings.append(Finding("ok", f"model constants from {logf.name}: cp {constants.cpair:.2f}, "
+                                  f"R {constants.rair:.2f}, zvir {constants.zvir:.4f}, "
+                                  f"g {constants.gravit:g}, ptop {constants.ptop:.3f} Pa"))
+    gain = read_profile_file(pfile)["gain"]
+    return {"path": cam, "profile": pfile, "constants": constants,
+            "dT": gain * float(a["dTS"]), "findings": findings}
 
 
 def cmd_check(args) -> int:
@@ -733,6 +852,27 @@ def build_parser() -> argparse.ArgumentParser:
                     help="patterned advice JSON (map beside it as <name>.pattern.nc)")
     pt.set_defaults(func=cmd_pattern)
 
+    ap_ = sub.add_parser("atm-profile",
+                         help="couple an ocean advice with an atmosphere jump (cam.r T "
+                              "+ q at fixed RH, measured vertical profile)")
+    ap_.add_argument("--advice", required=True,
+                     help="advice JSON from 'advise-ocean' (Gregory or --probe)")
+    ap_.add_argument("--archive", required=True,
+                     help="short-term archive root (rest/<date>/ with cam.i and docn.r)")
+    ap_.add_argument("--domain-file", help="docn domain file (area weights for the "
+                                           "surface warming)")
+    ap_.add_argument("--rundir", help="run directory, to find the domain in docn_ocn_in")
+    ap_.add_argument("--date", help="restart date (default: the January after the "
+                                    "advice's last model year)")
+    ap_.add_argument("--baseline-years", type=int, default=10)
+    ap_.add_argument("--top", default="auto",
+                     help="'auto' (up to where the measured warming turns negative) or "
+                          "a pressure in Pa above which nothing changes")
+    ap_.add_argument("--json", required=True,
+                     help="coupled advice JSON (profile beside it as "
+                          "<name>.atmprofile.nc)")
+    ap_.set_defaults(func=cmd_atm_profile)
+
     m = sub.add_parser("somtp-map", help="docn.r somtp -> lat-lon netCDF")
     mg = m.add_mutually_exclusive_group(required=True)
     mg.add_argument("--rundir", help="run directory (docn.r via rpointer.ocn)")
@@ -758,6 +898,11 @@ def build_parser() -> argparse.ArgumentParser:
                                          "default: domainfile in docn_ocn_in)")
     j.add_argument("--pattern-file", help="weight map for patterned ocean advice "
                                           "(default: the path recorded in it)")
+    j.add_argument("--cam-r", help="coupled jump: explicit cam.r (default: rpointer.atm)")
+    j.add_argument("--profile-file", help="coupled jump: atmosphere profile (default: "
+                                          "the path recorded in the advice)")
+    j.add_argument("--atm-log", help="coupled jump: atm.log with the model constants "
+                                     "(default: newest atm.log.* in the run directory)")
     j.add_argument("--taper-file", help="weight map for tapered advice (default: "
                                         "the path recorded in the advice)")
     j.add_argument("--snow-factor", type=float, default=1.0,

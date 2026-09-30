@@ -85,7 +85,7 @@ def restart_date(path) -> str:
 
 
 #: restart kinds this layer edits in place
-KINDS = (".cice.r.", ".docn.r.")
+KINDS = (".cice.r.", ".docn.r.", ".cam.r.")
 
 
 def case_of(path) -> str:
@@ -93,7 +93,7 @@ def case_of(path) -> str:
     for kind in KINDS:
         if kind in name:
             return name.split(kind)[0]
-    raise ValueError(f"{name} is not a cice.r or docn.r file")
+    raise ValueError(f"{name} is not a cice.r, docn.r or cam.r file")
 
 
 def first_model_year(date: str) -> int:
@@ -653,3 +653,218 @@ def write_somtp_map(docn_r, domain_file, out) -> Path:
         ds.source = str(Path(docn_r).resolve())
         ds.domain_file = str(Path(domain_file).resolve())
     return Path(out)
+
+
+# ---------------------------------------------------------------------------
+# cam_atm: cam.r temperature + water vapor (atmos.py)
+# ---------------------------------------------------------------------------
+
+PROFILE_SUFFIX = ".atmprofile.nc"
+_CONST_RE = {
+    "cpair": re.compile(r"^\s*CPDAIR:\s*([-+0-9.Ee]+)", re.M),
+    "rair": re.compile(r"^\s*RAIR:\s*([-+0-9.Ee]+)", re.M),
+    "zvir": re.compile(r"^\s*ZVIR:\s*([-+0-9.Ee]+)", re.M),
+    "gravit": re.compile(r"SURFACE GRAVITY \(m/s2\):\s*([-+0-9.Ee]+)"),
+    "ptop": re.compile(r"PTOP=\s*([-+0-9.Ee]+)"),
+}
+
+
+def locate_cam_restart(rundir) -> Path:
+    """The cam.r file rpointer.atm names (its first line)."""
+    rundir = Path(rundir)
+    rp = rundir / "rpointer.atm"
+    if not rp.is_file():
+        raise FileNotFoundError(f"no rpointer.atm in {rundir}")
+    lines = [l.strip() for l in rp.read_text().splitlines() if l.strip()]
+    path = (rundir / lines[0]).resolve()
+    if ".cam.r." not in path.name or not path.is_file():
+        raise FileNotFoundError(f"rpointer.atm names {lines[0]}, not an existing cam.r")
+    return path
+
+
+def atm_constants_from_log(path):
+    """AtmConstants from an ExoCAM atm.log (CPDAIR, RAIR, ZVIR, SURFACE
+    GRAVITY, PTOP). ``path`` may be the log or a run directory (its newest
+    atm.log.*)."""
+    from .atmos import AtmConstants
+    p = Path(path)
+    if p.is_dir():
+        logs = sorted(p.glob("atm.log.*"), key=lambda f: f.stat().st_mtime)
+        logs = [f for f in logs if not f.name.endswith(".gz")]
+        if not logs:
+            raise FileNotFoundError(f"no atm.log.* in {p} (pass --atm-log)")
+        p = logs[-1]
+    text = p.read_text(errors="replace")
+    vals = {}
+    for k, rx in _CONST_RE.items():
+        m = rx.search(text)
+        if not m:
+            raise ValueError(f"{p.name}: no {k} printout found (not an ExoCAM atm.log?)")
+        vals[k] = float(m.group(1))
+    return AtmConstants(**vals), p
+
+
+def read_cam_state(path) -> Dict[str, np.ndarray]:
+    from .atmos import STATE_FIELDS
+    _require_netcdf()
+    return {k: v.astype(float) for k, v in _read(path, list(STATE_FIELDS)).items()}
+
+
+def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = None,
+                     dry_run: bool = False, profile_file=None,
+                     extra_meta: Optional[dict] = None) -> JumpRecord:
+    """Raise cam.r T by ``dT_levels`` (K per level) and q at fixed RH, in place
+    with backup, keeping dry mass, TEOUT and the stratiform scheme's
+    previous-step state consistent (``atmos.jump_state``). Same backup / log /
+    re-apply-from-pristine rules as the other plugins; the record's factor slot
+    holds the surface-level increment."""
+    from .atmos import WRITTEN_FIELDS, CamAtmPlugin
+
+    _require_netcdf()
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if ".cam.r." not in path.name:
+        raise ValueError(f"{path.name} is not a cam.r file")
+    backup, log = backup_path(path), log_path(path)
+    if backup.exists():
+        if is_jumped(backup):
+            raise RuntimeError(f"{backup} is marked as already jumped; it is not "
+                               f"a pristine backup — refusing")
+        source = backup
+    else:
+        if is_jumped(path):
+            raise RuntimeError(f"{path.name} was already jumped but its pristine "
+                               f"backup {backup} is missing — refusing to shift twice")
+        source = path
+
+    before = read_cam_state(source)
+    plugin = CamAtmPlugin(constants)
+    jumped = plugin.apply_delta(before, np.asarray(dT_levels, dtype=float))
+    after, report = plugin.enforce_constraints(before, jumped)
+    rep = plugin.last_report
+
+    date = restart_date(path)
+    dT = np.asarray(dT_levels, dtype=float)
+    meta = {
+        "tool": "exocam-accelerate", "plugin": plugin.name,
+        "time_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "case": case_of(path), "restart_file": path.name, "restart_date": date,
+        "jump_model_year": first_model_year(date),
+        "dT_surface_level": float(dT[-1]), "dT_levels": dT.tolist(),
+        "fields": list(WRITTEN_FIELDS), "pristine_backup": str(backup),
+        "constants": {k: getattr(constants, k) for k in
+                      ("cpair", "rair", "zvir", "gravit", "ptop", "latvap", "latice")},
+        "report": rep,
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    copy = None
+    if profile_file is not None:
+        copy = state_dir(path) / (path.name + PROFILE_SUFFIX)
+        meta["profile"] = {"source": str(Path(profile_file).resolve()),
+                           "sha256": file_sha256(profile_file), "copy": str(copy)}
+    if dry_run:
+        return JumpRecord(path, backup, log, float(dT[-1]), 1.0, False,
+                          dict(report.adjustments), meta)
+
+    backup.parent.mkdir(exist_ok=True)
+    if copy is not None:
+        shutil.copy2(profile_file, copy)
+    if source is path:
+        shutil.copy2(path, backup)
+    else:
+        shutil.copy2(backup, path)
+    with netCDF4.Dataset(path, "r+") as ds:
+        ds.set_auto_mask(False)
+        for name in WRITTEN_FIELDS:
+            var = ds.variables[name]
+            var[:] = after[name].astype(var.dtype)
+        ds.setncattr(ATTR, json.dumps({k: v for k, v in meta.items()
+                                       if k not in ("dT_levels",)}))
+    check = _read(path, list(WRITTEN_FIELDS))
+    for name in WRITTEN_FIELDS:
+        if not np.array_equal(check[name], after[name].astype(check[name].dtype)):
+            raise RuntimeError(f"verification failed for {name} in {path}; restore "
+                               f"with the pristine copy {backup}")
+    log.write_text(json.dumps(dict(meta, adjustments=dict(report.adjustments),
+                                   advice=provenance), indent=2))
+    return JumpRecord(path, backup, log, float(dT[-1]), 1.0, True,
+                      dict(report.adjustments), meta)
+
+
+def archived_cam_i(archive, case: str, date: str) -> Path:
+    p = Path(archive) / "rest" / date / f"{case}.cam.i.{date}.nc"
+    if not p.is_file():
+        raise FileNotFoundError(f"no archived cam.i for {date}: {p} (the case must "
+                                f"write inithist at restart dates)")
+    return p
+
+
+def _cam_i_profile(path):
+    """Area-weighted horizontal-mean T per level and mean layer pressure."""
+    _require_netcdf()
+    with netCDF4.Dataset(path) as ds:
+        ds.set_auto_mask(False)
+        T = np.array(ds.variables["T"][0], dtype=float)
+        PS = np.array(ds.variables["PS"][0], dtype=float)
+        gw = np.array(ds.variables["gw"][:], dtype=float)
+        hyam = np.array(ds.variables["hyam"][:], dtype=float)
+        hybm = np.array(ds.variables["hybm"][:], dtype=float)
+        P0 = float(np.array(ds.variables["P0"][...]))
+    w = gw[:, None] * np.ones((1, T.shape[-1]))
+    w = w / w.sum()
+    return (T * w).sum((1, 2)), hyam * P0 + hybm * float((PS * w).sum())
+
+
+def build_atm_profile(archive, case: str, date: str, baseline_years: int = 10,
+                      domain_file=None, config=None):
+    """Measured warming profile from the pristine archived cam.i (and docn.r,
+    for the surface warming) at ``date`` and ``baseline_years`` earlier.
+    Returns ``(profile, sources)``."""
+    from .atmos import ProfileConfig, measured_profile
+
+    if baseline_years <= 0:
+        raise ValueError(f"baseline_years must be positive, got {baseline_years!r}")
+    old_date = shift_date(date, baseline_years)
+    ci_now, ci_old = archived_cam_i(archive, case, date), archived_cam_i(archive, case, old_date)
+    do_now, do_old = archived_docn_r(archive, case, date), archived_docn_r(archive, case, old_date)
+    for p in (do_now, do_old):
+        if is_jumped(p):
+            raise RuntimeError(f"{p.name} is marked as jumped: the profile baseline "
+                               f"must be pristine archived restarts")
+    s_now, s_old = read_somtp(do_now), read_somtp(do_old)
+    if domain_file is not None:
+        g = read_ocean_grid(domain_file)
+        a = np.where(g["mask"].ravel() > 0, g["area"].ravel(), 0.0)
+    else:
+        a = np.ones_like(s_now)
+    dTS = float(((s_now - s_old) * a).sum() / a.sum())
+    T_now, p_now = _cam_i_profile(ci_now)
+    T_old, _ = _cam_i_profile(ci_old)
+    prof = measured_profile(T_old, T_now, dTS, p_now, float(baseline_years),
+                            config or ProfileConfig())
+    srcs = [ci_old, ci_now, do_old, do_now] + ([Path(domain_file)] if domain_file else [])
+    return prof, {str(p): file_sha256(p) for p in srcs}
+
+
+def write_profile_file(path, prof, dTS_jump: Optional[float] = None) -> str:
+    _require_netcdf()
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.createDimension("lev", prof.gain.size)
+        for name, arr, units in (("gain", prof.gain, "K/K"), ("raw_gain", prof.raw_gain, "K/K"),
+                                 ("p_mid", prof.p_mid, "Pa"), ("T_now", prof.T_now, "K")):
+            v = ds.createVariable(name, "f8", ("lev",))
+            v[:] = arr
+            v.units = units
+        if dTS_jump is not None:
+            v = ds.createVariable("dT", "f8", ("lev",))
+            v[:] = prof.gain * dTS_jump
+            v.units = "K"
+        ds.setncattr(ATTR, json.dumps(dict(prof.summary(), dTS_jump=dTS_jump)))
+    return file_sha256(path)
+
+
+def read_profile_file(path) -> Dict[str, np.ndarray]:
+    _require_netcdf()
+    return _read(path, ["gain", "raw_gain", "p_mid", "T_now"])

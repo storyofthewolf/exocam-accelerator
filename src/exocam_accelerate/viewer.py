@@ -111,6 +111,7 @@ def find_jump_logs(directory) -> Dict[str, List[dict]]:
 
 
 MAP_GLOBS = ("*.latlon.nc", "*.pattern.nc", "*/*.latlon.nc", "*/*.pattern.nc")
+PROFILE_GLOBS = ("*.atmprofile.nc", "*/*.atmprofile.nc")
 
 
 def stamp(directory) -> float:
@@ -118,7 +119,7 @@ def stamp(directory) -> float:
     d = Path(directory)
     paths = list(d.glob("*.txt")) + list(d.glob(f"*.nc{LOG_SUFFIX}")) + \
         list(d.glob(f"*/*.nc{LOG_SUFFIX}"))
-    for g in MAP_GLOBS:
+    for g in MAP_GLOBS + PROFILE_GLOBS:
         paths += list(d.glob(g))
     return max((p.stat().st_mtime for p in paths), default=0.0)
 
@@ -280,7 +281,8 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
                   config: OceanAdvisorConfig = OceanAdvisorConfig(),
                   jump_logs: Optional[List[dict]] = None,
                   maps: Optional[List[dict]] = None,
-                  probe: Optional[ProbeConfig] = None) -> dict:
+                  probe: Optional[ProbeConfig] = None,
+                  profiles: Optional[List[dict]] = None) -> dict:
     """Everything the page draws for one hot (som_ocean) case. With ``probe``
     the probe advice is added (``probe``), with the outcome fan: where the
     post-probe state lands in phase space for each feedback lambda."""
@@ -364,6 +366,7 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
                  "somtp_dT": log.get("somtp_dT"),
                  "somtp_dT_applied": log.get("somtp_dT_applied_mean"),
                  "patterned": bool(log.get("pattern")), "time_utc": log.get("time_utc"),
+                 "coupled": bool(la.get("atmosphere")),
                  "advice": {k: la.get(k) for k in
                             ("N_now_fit", "N_target", "N_after", "TS_now", "TS_after",
                              "years_skipped", "model_year", "tau_years")}}
@@ -386,6 +389,7 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
                   "imbalance": config.imbalance, "series": series,
                   "advice": advice, "window": window, "gregory": greg,
                   "tried": tried, "probe": probe_d,
+                  "profiles": [p for p in (profiles or []) if p["file"].startswith(case + ".")],
                   "jumps": jumps, "maps": [m for m in (maps or [])
                                            if m.get("case") in (None, case)]})
 
@@ -425,6 +429,31 @@ def find_maps(directory) -> List[dict]:
                 case = Path(src).name.split(".docn.r.")[0]
             out.append({"file": name, "case": case, "lat": lat, "lon": lon,
                         "fields": fields})
+    return out
+
+
+def find_profiles(directory) -> List[dict]:
+    """Atmosphere jump profiles in DIR (``*.atmprofile.nc`` from atm-profile)."""
+    try:
+        import netCDF4
+    except ImportError:          # pragma: no cover
+        return []
+    out = []
+    for g in PROFILE_GLOBS:
+        for path in sorted(Path(directory).glob(g)):
+            try:
+                with netCDF4.Dataset(path) as ds:
+                    ds.set_auto_mask(False)
+                    v = ds.variables
+                    entry = {"file": path.name,
+                             **{k: np.array(v[k][:], dtype=float)
+                                for k in ("gain", "raw_gain", "p_mid", "T_now", "dT")
+                                if k in v}}
+                    meta = json.loads(getattr(ds, "exocam_accelerate", "{}"))
+            except (OSError, KeyError, ValueError):
+                continue
+            entry["summary"] = meta
+            out.append(entry)
     return out
 
 
@@ -475,7 +504,7 @@ def ocean_config_from_query(q: Dict[str, List[str]]) -> OceanAdvisorConfig:
     return OceanAdvisorConfig(**kw)
 
 
-def any_payload(cols, case, start_year, q, logs, maps=None) -> dict:
+def any_payload(cols, case, start_year, q, logs, maps=None, profiles=None) -> dict:
     """Ice or ocean payload by the case's regime (``regime=`` in the query
     overrides)."""
     regime = q.get("regime", [""])[0] or case_regime(cols)
@@ -486,7 +515,7 @@ def any_payload(cols, case, start_year, q, logs, maps=None) -> dict:
             pr = ProbeConfig(probe_years=_num(q, "probe_years") or 15.0,
                              probe_dT=_num(q, "probe_dT"), max_dT=oc.max_dT,
                              imbalance=oc.imbalance)
-        return ocean_payload(cols, case, start_year, oc, logs, maps, pr)
+        return ocean_payload(cols, case, start_year, oc, logs, maps, pr, profiles)
     p = case_payload(cols, case, start_year, config_from_query(q), logs)
     p["regime"] = "ice"
     return p
@@ -565,7 +594,7 @@ def make_handler(directory):
                     cols = merge_trend_files(info["files"], case)
                     p = any_payload(cols, case, info["start_year"], q,
                                     find_jump_logs(directory).get(case),
-                                    find_maps(directory))
+                                    find_maps(directory), find_profiles(directory))
                     p["files"] = [Path(f).name for f in info["files"]]
                     return self._json(p)
                 return self._json({"error": "not found"}, 404)

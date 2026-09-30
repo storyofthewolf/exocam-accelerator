@@ -75,12 +75,17 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   `cli advise-ocean|pattern|somtp-map`, viewer ocean layout + maps. See
   `docs/ocean-jump.md`.
 
+- **Coupled atmosphere jump (decided 2026-09-30):** cam.r in place +
+  continuation, measured per-level profile (two archived cam.i), q at fixed
+  RH (`atmos.py`, `restart.apply_atmos_jump`, `cli atm-profile`). Keeps dry
+  mass per layer (DELP, PS), recomputes **TEOUT** (else the energy fixer
+  undoes the jump on step 1), shifts TCWAT/QCWAT/T_TTEND; constants from the
+  run's atm.log, refused unless they reproduce TEOUT to 0.1 %. Coupled advice:
+  somtp by ΔTS (heat ratio 1). Rehearsed on D4 copies; not yet run in-model.
+
 ### Open (do NOT implement without a user decision)
 
-- **Other restart paths/targets.** Hybrid reboot (`.i.` files), clm plugins,
-  atmosphere fields (cam.r `PT` = T_v/pkz is editable for a continuation, but
-  the pbuf copies — `TCWAT` above all — must follow; see
-  `docs/ocean-jump.md`). Remaining questions (O3–O8)
+- **Other restart paths/targets.** Hybrid reboot (`.i.` files), clm plugins. Remaining questions (O3–O8)
   are in `docs/restart-integration-questions.md`.
 - Run orchestration (submitting/monitoring the forward runs between jumps).
 - Turbet-style in-situ radiative heating-rate multiplication
@@ -119,7 +124,9 @@ src/exocam_accelerate/
   taper.py        tapered jump: per-cell Stefan weights, peak-factor solve
   aqua_ice.py     aqua_ice plugin (scale vicen/eicen by a factor or per-cell map)
   som_ocean.py    som_ocean plugin (shift docn.r somtp; warming-pattern weights)
-  ocean_advise.py ocean jump advisor: TS vs energy_bot Gregory line -> somtp increment
+  ocean_advise.py ocean jump advisor: TS vs energy_bot Gregory line -> somtp increment;
+                  probe mode; couple_advice for ocean + atmosphere
+  atmos.py        cam_atm plugin: cam.r T + q (fixed RH), dry mass, TEOUT; measured profile
   restart.py      netCDF layer: cice.r / docn.r in-place jumps, backup/log in
                   run/exocam_accelerate/, somtp lat-lon maps
   runstate.py     pre-flight (SLURM, rpointers, archive) and whole-set rollback

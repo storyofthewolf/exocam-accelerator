@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
 
 from .advise import ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION
-from .ocean_advise import (OCEAN_ADVICE_SCHEMA_VERSION, OCEAN_PATTERN_SCHEMA_VERSION,
-                           OCEAN_PROBE_SCHEMA_VERSION)
+from .ocean_advise import (COUPLED_SCHEMA_VERSION, OCEAN_ADVICE_SCHEMA_VERSION,
+                           OCEAN_PATTERN_SCHEMA_VERSION, OCEAN_PROBE_SCHEMA_VERSION)
 from .restart import (
     DATE_RE,
     STATE_DIR,
@@ -50,7 +50,7 @@ _HIST_RE = re.compile(r"\.(\d{4})-(\d{2})(?:-\d{2}(?:-\d{5})?)?\.nc$")
 #: finding, Stage 0 item 5).
 KNOWN_ADVICE_SCHEMA_VERSIONS = {ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION,
                                 OCEAN_ADVICE_SCHEMA_VERSION, OCEAN_PATTERN_SCHEMA_VERSION,
-                                OCEAN_PROBE_SCHEMA_VERSION}
+                                OCEAN_PROBE_SCHEMA_VERSION, COUPLED_SCHEMA_VERSION}
 
 
 def active_jobs() -> Optional[Set[str]]:
@@ -264,17 +264,29 @@ class RollbackPlan:
     executed: bool = False
 
 
-def select_jump_log(rundir: Path, date: Optional[str]) -> Path:
+#: which file's log speaks for a jump that edited several files at one date
+#: (a coupled ocean + atmosphere jump): the one ``check`` scores
+_PRIMARY = {"som_ocean": 0, "aqua_ice": 1, "cam_atm": 2}
+
+
+def jump_log_group(rundir: Path, date: Optional[str]) -> List[Path]:
+    """Active jump logs of one jump (all files edited at one restart date),
+    primary first. Several dates active without ``date`` is an error."""
     logs = find_jump_logs(rundir)
     if date:
         logs = [p for p in logs if date in p.name]
     if not logs:
         raise FileNotFoundError(f"no active jump log in {rundir / STATE_DIR}"
                                 + (f" for {date}" if date else ""))
-    if len(logs) > 1:
-        raise ValueError(f"several active jump logs, pass --date: "
-                         f"{[p.name for p in logs]}")
-    return logs[0]
+    metas = {p: json.loads(p.read_text()) for p in logs}
+    dates = sorted({m.get("restart_date") for m in metas.values()})
+    if len(dates) > 1:
+        raise ValueError(f"active jump logs at several dates {dates}, pass --date")
+    return sorted(logs, key=lambda p: _PRIMARY.get(metas[p].get("plugin"), 9))
+
+
+def select_jump_log(rundir: Path, date: Optional[str]) -> Path:
+    return jump_log_group(rundir, date)[0]
 
 
 def _after(name: str, date: str) -> bool:
@@ -338,8 +350,14 @@ def plan_rollback(rundir, archive: Optional[Path] = None, date: Optional[str] = 
                                                           f"away? pass --archive)"))
             if new != text:
                 plan.actions.append(f"rewrite {rp.name} to {date}")
-        plan.actions.append(f"restore {cice.name} from its pristine backup")
-    plan.actions.append(f"retire jump log {log.name} (-> .rolledback.json)")
+        for lg in jump_log_group(rundir, date):
+            f = rundir / json.loads(lg.read_text())["restart_file"]
+            if not backup_path(f).exists():
+                plan.findings.append(Finding("block", f"no pristine backup "
+                                                      f"{backup_path(f)} for {f.name}"))
+            plan.actions.append(f"restore {f.name} from its pristine backup")
+    for lg in jump_log_group(rundir, date):
+        plan.actions.append(f"retire jump log {lg.name} (-> .rolledback.json)")
 
     for p in sorted(rundir.iterdir()):
         if p.is_file() and p.name.startswith(case + ".") and _after(p.name, date):
@@ -360,18 +378,19 @@ def execute_rollback(plan: RollbackPlan, archive: Optional[Path] = None) -> Roll
     for rp in rundir.glob("rpointer.*"):
         shutil.copy2(rp, save / rp.name)
 
-    log = select_jump_log(rundir, plan.date)
-    meta = json.loads(log.read_text())
-    cice = rundir / meta["restart_file"]
+    group = jump_log_group(rundir, plan.date)
     if plan.source == "archive":
         rest = Path(archive) / "rest" / plan.date
         for p in rest.iterdir():
             if p.is_file():
                 shutil.copy2(p, rundir / p.name)
-        log.rename(log.with_name(log.name[: -len(".json")] + ".rolledback.json"))
+        for log in group:
+            log.rename(log.with_name(log.name[: -len(".json")] + ".rolledback.json"))
     else:
         for rp in rundir.glob("rpointer.*"):
             rp.write_text(DATE_RE.sub(plan.date, rp.read_text()))
-        restore(cice, retire_log="rolledback")
+        for log in group:
+            restore(rundir / json.loads(log.read_text())["restart_file"],
+                    retire_log="rolledback")
     plan.executed = True
     return plan

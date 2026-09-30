@@ -756,3 +756,53 @@ def probe_ocean(columns: Dict[str, np.ndarray], case: str,
     out.setdefault("somtp_dT", None)
     out["reasons"], out["warnings"] = reasons, warnings
     return out
+
+
+# ---------------------------------------------------------------------------
+# coupled ocean + atmosphere jump
+# ---------------------------------------------------------------------------
+
+COUPLED_SCHEMA_VERSION = "ocean-atm-1"
+
+
+def couple_advice(advice: dict, profile_summary: dict) -> dict:
+    """Turn an ocean advice (Gregory or probe) into a coupled jump: somtp moves
+    by the TS change itself (heat ratio 1 — the atmosphere is jumped too, so it
+    takes nothing back), and cam.r gets ``profile gain x dTS`` per level with
+    q at fixed RH. ``profile_summary`` carries the profile file bookkeeping."""
+    if advice.get("plugin") != PLUGIN:
+        raise ValueError("not an ocean (som_ocean) advice")
+    if advice.get("somtp_dT") is None:
+        raise ValueError("advice says do not jump; nothing to couple")
+    if advice.get("atmosphere"):
+        raise ValueError("advice is already coupled")
+    cfg = dict(advice.get("config") or {})
+    hr = float(cfg.get("heat_ratio") or 1.0)
+    cap = float(cfg.get("max_dT") or 10.0)
+    # the TS change the advice wanted, before the ocean-only increment (TS x
+    # heat ratio) was clipped: a coupled jump no longer pays the heat ratio
+    if advice.get("mode") == "probe":
+        want = float(advice.get("somtp_dT_raw", advice["somtp_dT"])) / hr
+    else:
+        want = float(advice.get("dTS_target") or
+                     float(advice["TS_after"]) - float(advice["TS_now"]))
+    dTS = float(np.clip(want, -cap, cap))
+    out = dict(advice)
+    TS_after = float(advice["TS_now"]) + dTS
+    out.update(TS_after=TS_after, expected_after_jump={"TS": TS_after}, dTS=dTS)
+    lin = ((advice.get("gregory") or {}).get("fits") or {}).get("linear")
+    if lin:
+        c0, c1 = lin["params"]
+        out["N_after"] = N_after = (TS_after - c0) / c1
+        N_now, tau = advice.get("N_now_fit"), advice.get("tau_years")
+        out["years_skipped"] = (float(tau * np.log(N_now / N_after))
+                                if tau and N_now and N_now * N_after > 0
+                                and abs(N_after) < abs(N_now) else None)
+    elif advice.get("trend_K_per_yr"):
+        tr = float(advice["trend_K_per_yr"])
+        out["years_skipped"] = abs(dTS / tr) if tr * dTS > 0 else None
+    out.update(schema_version=COUPLED_SCHEMA_VERSION,
+               somtp_dT_ocean_only=advice["somtp_dT"], somtp_dT=dTS,
+               config=dict(cfg, heat_ratio=1.0, heat_ratio_ocean_only=cfg.get("heat_ratio")),
+               atmosphere=dict(profile_summary, dTS=dTS))
+    return out

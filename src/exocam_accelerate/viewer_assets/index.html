@@ -689,6 +689,9 @@ function renderOcean(d) {
     <div class="cap">Thin = annual mean, thick = ${d.which} running mean. Shaded = fit window. Dashed verticals = past jumps.</div>
     <div id="p_ts" class="plot" style="height:720px"></div>
   </div>
+  ${d.profiles && d.profiles.length ? `<div class="panel" style="margin-top:12px"><div class="ph"><h3>Atmosphere jump profile</h3></div>
+    <div class="cap">From <code>atm-profile</code> (*.atmprofile.nc): warming per level per K of surface warming, measured between two archived cam.i (dotted = raw, solid = applied: smoothed, clipped, tapered above the level where it turns negative). A coupled jump raises T by this × ΔTS and q at fixed RH.</div>
+    <div id="p_prof" class="plot" style="height:420px"></div></div>` : ''}
   ${d.maps && d.maps.length ? `<div class="panel" style="margin-top:12px"><div class="ph"><h3>Maps (docn.r somtp on the lat-lon grid)</h3></div>
     <div class="cap">From <code>somtp-map</code> (*.latlon.nc) and <code>pattern</code> (*.pattern.nc) files in the directory.</div>
     <div class="maps" id="maps"></div></div>` : ''}
@@ -698,7 +701,7 @@ function renderOcean(d) {
     document.querySelectorAll('.plot').forEach(p => p.innerHTML = '<div class="empty">Plotly did not load (offline?)</div>');
     return;
   }
-  plotGregory(d); plotPartition(d); plotProjection(d); plotOceanSeries(d); plotMaps(d);
+  plotGregory(d); plotPartition(d); plotProjection(d); plotOceanSeries(d); plotMaps(d); plotProfiles(d);
 }
 
 function oceanJumpTable(d) {
@@ -706,7 +709,7 @@ function oceanJumpTable(d) {
     d.jumps.map(j => {
       const c = j.check || {}, m = c.metrics || {};
       return `<tr><td>year ${j.year}<br><span class="hint">${j.restart_date || ''}</span></td>
-        <td>${sgn(j.somtp_dT, 2)} K${j.patterned ? '<br><span class="hint">patterned</span>' : ''}</td>
+        <td>${sgn(j.somtp_dT, 2)} K${j.patterned ? '<br><span class="hint">patterned</span>' : ''}${j.coupled ? '<br><span class="hint">+ atmosphere (T, q)</span>' : ''}</td>
         <td>TS ${fmt(j.advice.TS_after, 2)} K, N ${sgn(j.advice.N_after)}${m.N_obs !== undefined ? `<br><span class="hint">observed N ${sgn(m.N_obs)}, off-line ${sgn(m.dN)} ± ${fmt(m.tol_N)}</span>` : ''}
           ${m.heat_ratio_implied !== undefined ? `<br><span class="hint">implied heat ratio ${fmt(m.heat_ratio_implied, 2)}</span>` : ''}</td>
         <td>${statusChip(c.verdict) || '–'}</td>
@@ -867,6 +870,20 @@ function plotOceanSeries(d) {
   }
   layout.shapes = shapes;
   Plotly.react('p_ts', tr, layout, CFG);
+}
+
+function plotProfiles(d) {
+  if (!d.profiles || !d.profiles.length || !$('#p_prof')) return;
+  const tr = [], cols = [css('--series-1'), css('--series-2'), css('--series-3')];
+  d.profiles.forEach((P, i) => {
+    const c = cols[i % cols.length], hp = P.p_mid.map(p => p / 100);
+    tr.push({ x: P.raw_gain, y: hp, mode: 'lines', name: `${P.file} (raw)`, line: { color: c, width: 1, dash: 'dot' },
+      hovertemplate: '%{y:.3g} hPa: %{x:.2f} K/K<extra>raw</extra>' });
+    tr.push({ x: P.gain, y: hp, mode: 'lines+markers', name: `${P.file} (applied)`, line: { color: c, width: 2.2 }, marker: { size: 4 },
+      hovertemplate: '%{y:.3g} hPa: %{x:.2f} K per K of surface warming<extra></extra>' });
+  });
+  Plotly.react('p_prof', tr, base({ xaxis: ax('warming per K of surface warming (K/K)', { zeroline: true, zerolinecolor: css('--axis') }),
+    yaxis: ax('pressure (hPa)', { type: 'log', autorange: 'reversed' }), hovermode: 'closest' }), CFG);
 }
 
 function plotMaps(d) {

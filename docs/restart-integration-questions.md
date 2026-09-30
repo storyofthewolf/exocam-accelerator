@@ -361,5 +361,7 @@ run-directory `docn.r` + continuation, same bookkeeping as §7a. ExoCAM
 `docn_comp_mod.F90` confirms `somtp` is in K, stored lon-fastest on the docn
 domain, and copied to `So_t` on the first coupling step after a restart. Only
 `somtp` is edited; `docn.rs1.bin` is stream bookkeeping. Design and evidence:
-`docs/ocean-jump.md`. The atmosphere is not edited; `cam.r` `PT` = T_v/pkz is a
-possible continuation path for atmosphere jumps (open, user decision).
+`docs/ocean-jump.md`. The atmosphere is edited too (coupled jump, same day): `cam.r` in
+place + continuation — `PT`, `Q`, `DELP`, `PS`, condensate, `TEOUT`, `TCWAT`,
+`QCWAT`, `T_TTEND` kept mutually consistent (`docs/ocean-jump.md`). O3/O4 stay
+open: the hybrid path is not needed for this.

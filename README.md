@@ -220,6 +220,15 @@ exocam-accelerate somtp-map --rundir RUN -o somtp.nc          # somtp on the lat
 constrained; `check` then measures λ and the implied equilibrium from the
 probe's lever arm, and fails a probe after which the imbalance grows.
 
+**Atmosphere too (`atm-profile`).** At 365–375 K an ocean-only jump is mostly
+drained into the vapor column. `atm-profile --advice ADV --archive ARCH --json
+C.json` couples the advice with a cam.r edit: T per level × a profile measured
+from two archived cam.i, q at fixed RH, dry mass per layer kept (PS rises),
+`TEOUT` recomputed so CAM's energy fixer does not undo it, and the stratiform
+scheme's previous-step T/q shifted. `jump --advice C.json` then edits docn.r
+and cam.r together (model constants from the run's `atm.log`); `check` and
+`rollback` treat them as one jump.
+
 The Gregory advisor refuses when the run still has ice, when TS does not rise as the
 imbalance falls, when the current state is off the fitted line (a steepening
 relation — sensitivity rising with temperature), or when the jump would be
