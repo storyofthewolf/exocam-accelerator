@@ -160,3 +160,102 @@ def test_cli_refuses_no_jump_advice(rundir, tmp_path):
 def test_cli_hard_bound(rundir):
     assert main(["jump", "--rundir", str(rundir), "--ice-factor", "3",
                  "--allow-no-archive-rollback", "--skip-slurm-check", "--yes"]) == 2
+
+
+# ---- tapered jump ----
+
+OLD_DATE = "0091-01-01-00000"
+
+
+def _set(path, **fields):
+    with netCDF4.Dataset(path, "r+") as ds:
+        for name, fn in fields.items():
+            ds.variables[name][:] = fn(np.array(ds.variables[name][:]))
+
+
+@pytest.fixture
+def archive(rundir, tmp_path):
+    """Pristine archived restarts at DATE and 10 years earlier, plus a grid file."""
+    import shutil
+    _set(rundir / NAME, aicen=lambda a: np.full_like(a, 0.2))
+    arch = tmp_path / "archive"
+    now = arch / "rest" / DATE
+    old = arch / "rest" / OLD_DATE
+    now.mkdir(parents=True)
+    old.mkdir(parents=True)
+    shutil.copy2(rundir / NAME, now / NAME)
+    old_name = f"{CASE}.cice.r.{OLD_DATE}.nc"
+    shutil.copy2(rundir / NAME, old / old_name)
+    # ice grew by 25 % everywhere except column 0, which sat still
+    # (near local equilibrium)
+    _set(old / old_name, vicen=lambda v: np.concatenate(
+        [v[:, :, :1], 0.8 * v[:, :, 1:]], axis=2))
+    hist = arch / "ice" / "hist"
+    hist.mkdir(parents=True)
+    with netCDF4.Dataset(hist / f"{CASE}.cice.h.0100-12.nc", "w") as ds:
+        ds.createDimension("nj", 4)
+        ds.createDimension("ni", 6)
+        ds.createVariable("tarea", "f4", ("nj", "ni"))[:] = np.ones((4, 6))
+        ds.createVariable("tmask", "f4", ("nj", "ni"))[:] = np.ones((4, 6))
+    return arch
+
+
+def _uniform_advice(tmp_path):
+    from synth import stefan_columns, truncate
+    from exocam_accelerate.advise import AdvisorConfig, advise
+    adv = advise(truncate(stefan_columns(), 60), CASE,
+                 AdvisorConfig(max_ice_factor=1.5)).to_dict()
+    adv["model_year"] = 100
+    p = tmp_path / "advice.json"
+    p.write_text(json.dumps(adv))
+    return p
+
+
+def test_build_taper_mask_from_archive(archive):
+    mask, sources = restart.build_taper_mask(archive, CASE, DATE, 10)
+    assert mask.weight.shape == (4, 6)
+    assert np.all(mask.weight[:, 0] == 0.0)          # the static column
+    assert mask.weight[:, 1:].max() == 1.0
+    assert len(sources) == 3
+
+
+def test_taper_mask_refuses_jumped_baseline(archive):
+    restart.apply_ice_jump(archive / "rest" / DATE / NAME, 1.2)
+    with pytest.raises(RuntimeError, match="pristine"):
+        restart.build_taper_mask(archive, CASE, DATE, 10)
+
+
+def test_cli_taper_then_jump(rundir, archive, tmp_path):
+    from exocam_accelerate.advise import TAPERED_ADVICE_SCHEMA_VERSION
+    from exocam_accelerate.taper import cell_factors
+    path = rundir / NAME
+    v0, e0 = read(path, "vicen"), read(path, "eicen")
+    out = tmp_path / "tapered.json"
+    assert main(["taper", "--advice", str(_uniform_advice(tmp_path)),
+                 "--archive", str(archive), "--json", str(out)]) == 0
+    adv = json.loads(out.read_text())
+    assert adv["schema_version"] == TAPERED_ADVICE_SCHEMA_VERSION
+    weights = tmp_path / "tapered.taper.nc"
+    assert adv["taper"]["weights_file"] == str(weights.resolve())
+    w = restart.read_taper_file(weights)["weight"]
+
+    assert main(["jump", "--rundir", str(rundir), "--advice", str(out),
+                 "--allow-no-archive-rollback", "--skip-slurm-check", "--yes"]) == 0
+    f = cell_factors(adv["ice_factor"], w)
+    np.testing.assert_allclose(read(path, "vicen"), v0 * f)
+    np.testing.assert_allclose(read(path, "eicen"), e0 * f)
+    np.testing.assert_allclose(read(path, "vicen")[:, :, 0], v0[:, :, 0])
+    log = json.loads(restart.log_path(path).read_text())
+    assert log["taper"]["sha256"] == adv["taper"]["weights_sha256"]
+    assert (restart.state_dir(path) / (NAME + restart.TAPER_SUFFIX)).is_file()
+
+
+def test_cli_jump_refuses_altered_weight_map(rundir, archive, tmp_path):
+    out = tmp_path / "tapered.json"
+    assert main(["taper", "--advice", str(_uniform_advice(tmp_path)),
+                 "--archive", str(archive), "--json", str(out)]) == 0
+    _set(tmp_path / "tapered.taper.nc", weight=lambda w: np.ones_like(w))
+    v0 = read(rundir / NAME, "vicen")
+    assert main(["jump", "--rundir", str(rundir), "--advice", str(out),
+                 "--allow-no-archive-rollback", "--skip-slurm-check", "--yes"]) == 2
+    np.testing.assert_array_equal(read(rundir / NAME, "vicen"), v0)

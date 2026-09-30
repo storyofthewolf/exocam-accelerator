@@ -10,7 +10,8 @@ run actually has each year — not a single number:
 
 * landed:   first post-jump annual hi ~ hi_before x factor (else the edit
             never reached the model: wrong file, stale rpointer, rollback);
-* on-law:   N_obs ~ a + b/hi_obs   (the conduction law the jump relied on);
+* on-law:   N_obs ~ a + b/hi_obs   (the conduction law the jump relied on;
+            plus ``law_offset_after`` for a tapered jump);
 * TS:       TS_obs ~ c0 + c1*N_law (the Gregory relation it relied on);
   both measured relative to the run's own offset from those relations over the
   last pre-jump years, so slow drift of the fit is not blamed on the jump;
@@ -89,7 +90,11 @@ def check_jump(columns: Dict[str, np.ndarray], jump_log: dict,
     """Score the run after a jump against the advice recorded in ``jump_log``."""
     advice = jump_log.get("advice") or {}
     jump_year = int(jump_log["jump_model_year"])
-    factor = float(jump_log["ice_factor"])
+    # a tapered jump (schema 2) scales cells unequally: the global mean moves
+    # by the effective factor, and the run should sit law_offset_after off the
+    # global law (taper.py) — zero for a uniform jump
+    factor = float(advice.get("effective_factor") or jump_log["ice_factor"])
+    offset = float(advice.get("law_offset_after") or 0.0)
     ice = advice.get("ice") or {}
     try:
         a, b = ice["fits"]["hyperbolic"]["params"]
@@ -140,7 +145,7 @@ def check_jump(columns: Dict[str, np.ndarray], jump_log: dict,
     # offset is not the jump's doing).
     last = (years < jump_year) & (years >= jump_year - config.baseline_years)
     bias_N = float(np.mean(N[last] - (a + b / h[last]))) if last.any() else 0.0
-    N_law = a + b / h[settled]
+    N_law = a + b / h[settled] + offset
     dN = float(np.mean(N[settled] - N_law)) - bias_N
     tol_N = max(config.tol_N, 2.0 * sig_N / np.sqrt(n_set))
     metrics.update(N_obs=float(N[settled].mean()), N_law=float(N_law.mean()),

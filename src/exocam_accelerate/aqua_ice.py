@@ -14,6 +14,9 @@ What is scaled, and why this is self-consistent:
   exchange snapshot in cpl.r / cam.rs stays consistent with the ice state.
   This is what makes an in-place continuation restart safe for this plugin
   (restart-integration doc, O2).
+* The ice factor may be one number or a per-cell ``(nj, ni)`` map (a tapered
+  jump, ``taper.py``); a map multiplies every category and layer of a cell
+  alike, so each cell keeps its own enthalpy per unit volume.
 * Snow (``vsnon``/``esnon``) is scaled only when a separate snow factor != 1
   is requested; the Tier-0 sweep found snow near equilibrium already.
 * Thickness per category rises (vicen/aicen); cells pushed past a category's
@@ -51,6 +54,18 @@ def check_factor(factor: float, what: str = "factor") -> float:
     return factor
 
 
+def check_factor_map(factors, what: str = "factor") -> np.ndarray:
+    """A per-cell factor map: every value within the hard bound."""
+    f = np.asarray(factors, dtype=float)
+    if f.ndim != 2:
+        raise ValueError(f"{what} map must be 2-D (nj, ni), got shape {f.shape}")
+    if not np.all(np.isfinite(f)):
+        raise ValueError(f"{what} map has non-finite values")
+    check_factor(f.min(), f"{what} (min)")
+    check_factor(f.max(), f"{what} (max)")
+    return f
+
+
 class AquaIcePlugin(VariablePlugin):
     name = "aqua_ice"
     file_kind = "cice.r"
@@ -59,15 +74,21 @@ class AquaIcePlugin(VariablePlugin):
     def apply_delta(self, fields: Dict[str, np.ndarray], delta) -> Dict[str, np.ndarray]:
         """``delta`` is ``(ice_factor, snow_factor)`` or a bare ice factor.
 
+        ``ice_factor`` may be a ``(nj, ni)`` map; it broadcasts over the
+        leading category/layer axis of ``vicen``/``eicen``.
+
         Only the fields present in ``fields`` are returned; snow fields are
         returned (scaled) only when the snow factor differs from 1.
         """
-        if np.ndim(delta) == 0:
-            ice_f, snow_f = float(delta), 1.0
+        if isinstance(delta, (tuple, list)):
+            ice_f, snow_f = delta
         else:
-            ice_f, snow_f = (float(x) for x in delta)
-        check_factor(ice_f, "ice factor")
-        check_factor(snow_f, "snow factor")
+            ice_f, snow_f = delta, 1.0
+        if np.ndim(ice_f) == 0:
+            ice_f = check_factor(ice_f, "ice factor")
+        else:
+            ice_f = check_factor_map(ice_f, "ice factor")
+        snow_f = check_factor(snow_f, "snow factor")
         out = {}
         for name in ICE_FIELDS:
             out[name] = np.asarray(fields[name], dtype=float) * ice_f

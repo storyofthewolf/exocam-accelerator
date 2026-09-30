@@ -314,7 +314,7 @@ function jumpTable(d) {
     d.jumps.map(j => {
       const c = j.check || {}; const m = c.metrics || {};
       return `<tr><td>year ${j.year}<br><span class="hint">${j.restart_date || ''}</span></td>
-        <td>×${fmt(j.ice_factor, 3)}</td>
+        <td>×${fmt(j.ice_factor, 3)}${j.tapered ? `<br><span class="hint">tapered · mean ×${fmt(j.ice_factor_eff, 3)}</span>` : ''}</td>
         <td>${sgn(j.advice.N_after)} W/m²${m.N_obs !== undefined ? `<br><span class="hint">observed ${sgn(m.N_obs)}, off-law ${sgn(m.dN)} ± ${fmt(m.tol_N)}</span>` : ''}</td>
         <td>${statusChip(c.verdict) || '–'}</td>
         <td>${c.post_years ?? '–'} / ${c.settled_years ?? '–'}</td>
@@ -407,10 +407,16 @@ function plotPhase(d) {
   }
   d.jumps.forEach(j => {                       // each past jump's own law and landing
     if (!j.advice.law || !j.advice.hi_before) return;
-    const [a, b] = j.advice.law, h0 = j.advice.hi_before, h1 = h0 * j.ice_factor;
+    const [a, b] = j.advice.law, h0 = j.advice.hi_before, h1 = h0 * j.ice_factor_eff;
     const hs = Array.from({ length: 60 }, (_, i) => h0 * 0.9 + (h1 * 1.1 - h0 * 0.9) * i / 59);
     tr.push({ type: 'scatter', mode: 'lines', name: `law at jump ${j.year}`, x: hs.map(X), y: hs.map(h => a + b / h),
       line: { color: css('--series-2'), width: 1.5, dash: 'dot' }, hoverinfo: 'skip' });
+    const off = j.advice.law_offset_after;
+    if (off) {                                 // tapered jump: where the run should sit instead
+      const hp = hs.filter(h => h >= h1 * 0.97);
+      tr.push({ type: 'scatter', mode: 'lines', name: `law + taper offset (jump ${j.year})`, x: hp.map(X),
+        y: hp.map(h => a + b / h + off), line: { color: css('--series-3'), width: 1.5, dash: 'dot' }, hoverinfo: 'skip' });
+    }
   });
   const fx = [], fy = [];
   d.years.forEach((_, i) => { if (focus(d, i)) { fx.push(X(H.native[i])); fy.push(N.native[i]); } });
@@ -481,7 +487,7 @@ function plotSeries(d) {
     // predicted levels for each past jump
     d.jumps.forEach(j => {
       const lvl = { energy_top: j.advice.N_after, TS: (j.advice.expected_after_jump || {}).TS,
-        hi: j.advice.hi_before ? j.advice.hi_before * j.ice_factor : null }[k];
+        hi: j.advice.hi_before ? j.advice.hi_before * j.ice_factor_eff : null }[k];
       if (lvl === null || lvl === undefined) return;
       const x0 = j.year + shift(j.year);
       tr.push({ x: [x0, x0 + 20], y: [lvl, lvl], yaxis: yx, mode: 'lines', name: 'predicted',
@@ -512,7 +518,7 @@ function plotSeries(d) {
       d.years.forEach((_, j) => { if (focus(d, j)) { v.push(s.native[j]); if (s.smooth) v.push(s.smooth[j]); } });
       v.push(wl);
       d.jumps.forEach(j => v.push({ energy_top: j.advice.N_after, TS: (j.advice.expected_after_jump || {}).TS,
-        hi: j.advice.hi_before ? j.advice.hi_before * j.ice_factor : null }[k]));
+        hi: j.advice.hi_before ? j.advice.hi_before * j.ice_factor_eff : null }[k]));
       layout[i === 0 ? 'yaxis' : 'yaxis' + (i + 1)].range = rng(v);
     });
   }
@@ -542,7 +548,7 @@ function plotAccel(d) {
   d.jumps.forEach(j => {
     if (!j.advice.hi_before) return;
     const x0 = j.year + shift(j.year - 1), sk = j.advice.years_skipped;
-    const h0 = j.advice.hi_before, h1 = h0 * j.ice_factor;
+    const h0 = j.advice.hi_before, h1 = h0 * j.ice_factor_eff;
     if (!sk) return;
     const s2 = (h1 * h1 - h0 * h0) / sk;                        // the Stefan rate the jump assumed
     const tt = Array.from({ length: 50 }, (_, i) => i * sk / 49);

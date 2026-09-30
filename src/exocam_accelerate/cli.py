@@ -1,8 +1,12 @@
-"""Command line: ``exocam-accelerate {advise,jump,check,rollback,restore}``.
+"""Command line: ``exocam-accelerate {advise,taper,jump,check,rollback,restore,view}``.
 
 advise    read a case's exocam-trend .txt, fit the ice conduction law, print
           the recommended ice factor (--json saves it). Detects earlier jumps
           and then fits post-jump data only.
+taper     re-size that advice for a tapered jump: from two archived restarts,
+          weight each cell by how conduction-limited its ice growth is, and
+          solve for the peak factor that still reaches the target imbalance
+          (writes tapered advice JSON + a .taper.nc weight map; needs netCDF4).
 jump      pre-flight the run directory (no job queued/running, consistent
           rpointers, no output past the restart, pristine archived set), then
           scale vicen/eicen in the cice.r that rpointer.ice names, in place.
@@ -13,7 +17,7 @@ restore   before resubmitting only: put the pristine cice.r back.
 view      local interactive viewer (http://127.0.0.1:8765) of the trend files and
           jump logs in a directory: phase space, fits, jumps, check verdicts.
 
-Workflow per case: advise -> jump -> resubmit a SHORT continuation segment
+Workflow per case: advise -> [taper] -> jump -> resubmit a SHORT continuation segment
 (CONTINUE_RUN=TRUE) -> regenerate trends -> check -> PASS: resume normal
 segments; FAIL: rollback and resubmit.
 """
@@ -95,6 +99,54 @@ def cmd_advise(args) -> int:
     return 0
 
 
+def cmd_taper(args) -> int:
+    from .advise import taper_advice
+    from .restart import build_taper_mask, first_model_year, write_taper_file
+    from .taper import TaperConfig
+
+    advice = json.loads(Path(args.advice).read_text())
+    if advice.get("ice_factor") is None:
+        print("advice says do not jump:", *advice.get("reasons", []), sep="\n  ")
+        return 1
+    case = advice["case"]
+    date = args.date or f"{int(advice['model_year']) + 1:04d}-01-01-00000"
+    if first_model_year(date) - 1 != int(advice["model_year"]):
+        print(f"warning: advice data run through model year {advice['model_year']}, "
+              f"the taper restart is {date}")
+    cfg = TaperConfig(ramp_lo=args.ramp[0], ramp_hi=args.ramp[1])
+    mask, sources = build_taper_mask(args.archive, case, date, args.baseline_years,
+                                     args.grid_file, cfg)
+    out = taper_advice(advice, mask, args.max_ice_factor)
+
+    out_json = Path(args.json)
+    stem = out_json.name[:-5] if out_json.name.endswith(".json") else out_json.name
+    weights = out_json.with_name(stem + ".taper.nc")
+    sha = write_taper_file(weights, mask, out["ice_factor"])
+    out["taper"].update(restart_date=date, weights_file=str(weights.resolve()),
+                        weights_sha256=sha, sources=sources)
+
+    t, u = out["taper"], out["taper"]["uniform"]
+    print(f"case {case}   restart {date}   baseline {args.baseline_years} yr   "
+          f"S_ref {t['S_ref_m2_per_yr']:.2f} m2/yr   ramp {cfg.ramp_lo:g}-{cfg.ramp_hi:g}")
+    print(f"area: full weight {t['area_full_weight']:.1%}   partial "
+          f"{t['area_partial_weight']:.1%}   unscaled {t['area_unscaled']:.1%}")
+    note = (f" (clipped from {_fmt(out['ice_factor_raw'], 4)})"
+            if out["ice_factor_clipped"] else "")
+    print(f"peak factor {out['ice_factor']:.4f}{note}   global-mean hi x"
+          f"{out['effective_factor']:.4f}")
+    print(f"expected N after {out['N_after']:+.2f} W/m2 (uniform x{u['ice_factor']:g}: "
+          f"{u['N_after']:+.2f})   skips ~{_fmt(out['years_skipped'], 3)} yr "
+          f"(uniform ~{_fmt(u['years_skipped'], 3)})")
+    for v, x in (out.get("expected_after_jump") or {}).items():
+        if x is not None:
+            print(f"  {v} ~ {x:.2f}")
+    for w in out["warnings"][len(advice.get("warnings") or []):]:
+        print(f"warning: {w}")
+    out_json.write_text(json.dumps(out, indent=2))
+    print(f"wrote {out_json} and {weights}")
+    return 0
+
+
 def _target(args) -> Path:
     from .restart import locate_cice_restart
     if args.cice_r:
@@ -123,6 +175,20 @@ def cmd_jump(args) -> int:
         ice_factor = args.ice_factor
 
     path = _target(args)
+    taper_file = None
+    if advice is not None and advice.get("taper"):
+        from .restart import file_sha256, restart_date
+        t = advice["taper"]
+        taper_file = Path(args.taper_file or t.get("weights_file") or "")
+        if not taper_file.is_file():
+            raise FileNotFoundError(f"tapered advice: weight map {taper_file} not found "
+                                    f"(pass --taper-file)")
+        if file_sha256(taper_file) != t.get("weights_sha256"):
+            raise RuntimeError(f"{taper_file.name} does not match the sha256 recorded "
+                               f"in the advice — refusing")
+        if t.get("restart_date") != restart_date(path):
+            raise RuntimeError(f"tapered advice was built for restart "
+                               f"{t.get('restart_date')}, target is {restart_date(path)}")
     probe = None if args.skip_slurm_check else active_jobs
     archive = Path(args.archive) if args.archive else None
     print("pre-flight:")
@@ -133,12 +199,18 @@ def cmd_jump(args) -> int:
         print("refusing to jump: resolve the BLOCK items above")
         return EXIT_BLOCKED
 
-    rec = apply_ice_jump(path, ice_factor, args.snow_factor, advice, dry_run=True)
+    rec = apply_ice_jump(path, ice_factor, args.snow_factor, advice, dry_run=True,
+                         taper_file=taper_file)
     print(f"target   {rec.path}")
     print(f"backup   {rec.backup}"
           f"{' (exists; jump re-applied from it)' if rec.backup.exists() else ' (will be created)'}")
     print(f"factors  ice {rec.ice_factor:g}   snow {rec.snow_factor:g}   "
           f"first post-jump model year {rec.metadata['jump_model_year']}")
+    if taper_file is not None:
+        tm = rec.metadata["taper"]
+        print(f"tapered  cell factors {tm['cell_factor_min']:.3f}-"
+              f"{tm['cell_factor_max']:.3f}   global-mean hi "
+              f"x{advice['effective_factor']:.4f}   map {taper_file}")
     for name, msg in rec.adjustments.items():
         print(f"  {name:>6}: {msg}")
     if args.dry_run:
@@ -148,7 +220,8 @@ def cmd_jump(args) -> int:
         if input("write this jump? [y/N] ").strip().lower() != "y":
             print("aborted")
             return 1
-    rec = apply_ice_jump(path, ice_factor, args.snow_factor, advice)
+    rec = apply_ice_jump(path, ice_factor, args.snow_factor, advice,
+                         taper_file=taper_file)
     print(f"written and verified; jump log {rec.log}")
     if probe is not None:
         jobs = probe()
@@ -298,12 +371,35 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--json", help="save advice as JSON (input to 'jump --advice')")
     a.set_defaults(func=cmd_advise)
 
+    t = sub.add_parser("taper", help="re-size advice for a tapered (per-cell) jump")
+    t.add_argument("--advice", required=True, help="advice JSON from 'advise --json'")
+    t.add_argument("--archive", required=True,
+                   help="the case's short-term archive root (rest/<date>/, ice/hist/)")
+    t.add_argument("--date", help="restart date to jump (default: the January after "
+                                  "the advice's last model year)")
+    t.add_argument("--baseline-years", type=int, default=10,
+                   help="years between the two archived restarts the growth "
+                        "rates come from (10)")
+    t.add_argument("--ramp", type=float, nargs=2, default=(0.05, 0.40),
+                   metavar=("LO", "HI"),
+                   help="weight 0 below LO, 1 above HI, in S/S_ref (0.05 0.40)")
+    t.add_argument("--max-ice-factor", type=float, default=None,
+                   help="clip on the peak factor (default: the advice's)")
+    t.add_argument("--grid-file", help="cice.h file for tarea/tmask (default: "
+                                       "latest in <archive>/ice/hist)")
+    t.add_argument("--json", required=True,
+                   help="tapered advice JSON to write (the weight map goes "
+                        "beside it as <name>.taper.nc)")
+    t.set_defaults(func=cmd_taper)
+
     j = sub.add_parser("jump", help="pre-flight, then scale cice.r ice in place")
     _add_target(j)
     f = j.add_mutually_exclusive_group(required=True)
     f.add_argument("--advice", help="advice JSON from 'advise --json'")
     f.add_argument("--ice-factor", type=float,
                    help="explicit ice factor (no advice: 'check' cannot score it)")
+    j.add_argument("--taper-file", help="weight map for tapered advice (default: "
+                                        "the path recorded in the advice)")
     j.add_argument("--snow-factor", type=float, default=1.0,
                    help="scale vsnon/esnon too (default 1 = untouched)")
     _add_safety(j)

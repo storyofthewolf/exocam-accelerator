@@ -219,9 +219,14 @@ def case_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1,
                  "restart_date": log.get("restart_date"),
                  "ice_factor": log.get("ice_factor"), "time_utc": log.get("time_utc")}
         la = log.get("advice") or {}
+        # a tapered jump scales cells unequally: global-mean hi moves by the
+        # effective factor, and the run should sit law_offset_after off the law
+        entry["ice_factor_eff"] = la.get("effective_factor") or log.get("ice_factor")
+        entry["tapered"] = bool(la.get("taper"))
         entry["advice"] = {k: la.get(k) for k in
                            ("N_now_fit", "N_target", "N_after", "years_skipped",
-                            "ice_factor_raw", "model_year", "expected_after_jump")}
+                            "ice_factor_raw", "model_year", "expected_after_jump",
+                            "law_offset_after")}
         try:
             entry["advice"]["hi_before"] = la["ice"]["X_now"]
             entry["advice"]["law"] = la["ice"]["fits"]["hyperbolic"]["params"]

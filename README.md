@@ -102,6 +102,17 @@ says produces it, by scaling ice volume and enthalpy (`vicen`, `eicen`) in
 `cice.r` by one factor. Ice area, surface temperature and albedo are left
 alone, so the run resumes as a plain continuation.
 
+**Tapered jump (recommended).** A uniform factor also thickens ice that was
+already near its local equilibrium — on tidally locked cases, the thin ice
+around the substellar point — and that extra ice melts back (grp4 pt01/pt03,
+2026-09-29). `taper` weights each cell by how conduction-limited its growth
+was over the previous `--baseline-years` (Stefan product `dh/dt·h` against the
+thick ice's), scales cell by cell as `1 + (F-1)·weight`, and solves for the
+peak factor `F` that still reaches the target imbalance. It reads two
+archived `cice.r` files and a `cice.h` grid file, so it runs on the HPC; the
+tapered advice (schema 2) and its `.taper.nc` weight map feed `jump` and
+`check` unchanged.
+
 The workflow is built for babysitting a few production runs at a time: every
 step that touches a case happens at a segment boundary with no job queued,
 every jump can be undone, and the post-jump verdict is one command.
@@ -119,11 +130,13 @@ at a gentle factor (`--max-ice-factor 1.2`), run a short segment, `check`.
 # on the HPC, per case, at a segment boundary
 ./run_trend_batch.sh --cam --cice ... <case>             # exocam-trend: fresh series
 exocam-accelerate advise <trend_dir> <case> --json advice.json
+exocam-accelerate taper --advice advice.json --archive <DOUT_S_ROOT> \
+    --json tapered.json                                   # + tapered.taper.nc
 
 # stop the chain first: no job for the case may be queued or running
-exocam-accelerate jump --rundir <rundir> --advice advice.json \
+exocam-accelerate jump --rundir <rundir> --advice tapered.json \
     --archive <DOUT_S_ROOT> --dry-run                     # pre-flight + preview
-exocam-accelerate jump --rundir <rundir> --advice advice.json --archive <DOUT_S_ROOT>
+exocam-accelerate jump --rundir <rundir> --advice tapered.json --archive <DOUT_S_ROOT>
 
 # resubmit a SHORT continuation segment (e.g. STOP_N=5 years), regenerate
 # trends when it ends, then:

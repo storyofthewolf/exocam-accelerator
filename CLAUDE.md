@@ -46,6 +46,16 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   `${CASE}.cice.r.*` in the run directory. See
   `docs/restart-integration-questions.md` §7 and
   `docs/phase-space-extrapolation.md`.
+- **Tapered jump (decided 2026-09-29):** after the first real jumps (grp4
+  pt01/pt03 ×1.5 at 0141, both PASS) showed near-equilibrium thin ice (the
+  substellar ring) melting back, the jump is applied per cell as
+  `1 + (F-1)·weight`, with weight a ramp (default 0.05–0.40) of the Stefan
+  product `dh/dt·h` relative to the thick ice, measured between two pristine
+  archived restarts; partial-ice cells are never scaled. Peak `F` solves
+  `(N_after-a)/(N_now-a) = Σ A g/f / Σ A g` (per-cell freezing ∝ 1/h).
+  `taper.py` (pure), `advise.taper_advice` (schema 2: `effective_factor`,
+  `law_offset_after`), `restart.build_taper_mask`, `cli taper`; `check` scores
+  against law + offset with the effective factor.
 
 ### Open (do NOT implement without a user decision)
 
@@ -86,11 +96,12 @@ src/exocam_accelerate/
   phase_space.py  X-vs-N fits (linear / saturating / hyperbolic) + phase-space gate
   advise.py       jump advisor: trend columns -> ice factor, N_after, TS reference
   plugins.py      VariablePlugin interface + registry
-  aqua_ice.py     aqua_ice plugin (scale vicen/eicen, constraint pass)
+  taper.py        tapered jump: per-cell Stefan weights, peak-factor solve
+  aqua_ice.py     aqua_ice plugin (scale vicen/eicen by a factor or per-cell map)
   restart.py      netCDF layer: cice.r in-place jump, backup/log in run/exocam_accelerate/
   runstate.py     pre-flight (SLURM, rpointers, archive) and whole-set rollback
   check.py        post-jump verdict PASS/WAIT/FAIL (the consistency check for aqua_ice)
-  cli.py          `exocam-accelerate advise|jump|check|rollback|restore|view`
+  cli.py          `exocam-accelerate advise|taper|jump|check|rollback|restore|view`
   viewer.py       local interactive viewer (stdlib http.server + viewer_assets/index.html,
                   Plotly via CDN); draws only what advise/check compute
   consistency.py  generic ConsistencyCheck interface (design only; check.py is the aqua_ice one)

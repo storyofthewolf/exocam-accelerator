@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
 
-from .advise import ADVICE_SCHEMA_VERSION
+from .advise import ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION
 from .restart import (
     DATE_RE,
     STATE_DIR,
@@ -46,7 +46,7 @@ _HIST_RE = re.compile(r"\.(\d{4})-(\d{2})(?:-\d{2}(?:-\d{5})?)?\.nc$")
 #: Advice schema versions this build understands. ``preflight`` refuses advice
 #: whose ``schema_version`` is missing or not in this set (feasibility-review
 #: finding, Stage 0 item 5).
-KNOWN_ADVICE_SCHEMA_VERSIONS = {ADVICE_SCHEMA_VERSION}
+KNOWN_ADVICE_SCHEMA_VERSIONS = {ADVICE_SCHEMA_VERSION, TAPERED_ADVICE_SCHEMA_VERSION}
 
 
 def active_jobs() -> Optional[Set[str]]:

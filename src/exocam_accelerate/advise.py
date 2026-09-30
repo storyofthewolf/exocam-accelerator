@@ -39,8 +39,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .aqua_ice import check_factor
 from .hindcast import annual_mean_series
 from .phase_space import PhaseExtrapolation, PhaseGateConfig, extrapolate
+from .taper import TaperMask, effective_factor, imbalance_ratio, solve_peak
 from .trend_io import trend_series
 
 ICE_VOLUME_VAR = "hi"
@@ -53,6 +55,9 @@ TEMPERATURE_VARS = ("TS", "Tsfc")
 #: advice whose ``schema_version`` is missing or not in
 #: ``runstate.KNOWN_ADVICE_SCHEMA_VERSIONS``.
 ADVICE_SCHEMA_VERSION = "1"
+#: Advice refined by ``taper_advice`` (per-cell factors; adds ``taper``,
+#: ``effective_factor`` and ``law_offset_after``).
+TAPERED_ADVICE_SCHEMA_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -439,3 +444,85 @@ def advise(columns: Dict[str, np.ndarray], case: str,
 
     return result(N_target, N_now_fit, ice, temps, factor, raw, clipped, N_after,
                   skipped)
+
+
+def taper_advice(advice: dict, mask: TaperMask,
+                 max_ice_factor: Optional[float] = None) -> dict:
+    """Re-size a jump advice (``Advice.to_dict()``) for a tapered jump.
+
+    Keeps the advice's fitted conduction law (a, b) and target, and solves for
+    the peak factor F whose per-cell factors ``1 + (F-1)*weight`` reach the
+    target under ``taper.imbalance_ratio``. The result is a new advice dict
+    (schema 2) whose ``ice_factor`` is the (clipped) peak factor and which
+    records:
+
+    * ``effective_factor`` — area-mean ice after / before: what the global
+      mean hi in the trend output will show (the ``check`` landing test);
+    * ``law_offset_after`` — N_after minus the global law at the effective
+      thickness. The global law a + b/hi assumes every cell thickened by the
+      same factor; after a taper the run should instead sit this far off it,
+      and ``check`` scores N against the law plus this offset;
+    * ``taper`` — mask summary and the uniform advice it replaced.
+    """
+    if advice.get("ice_factor") is None:
+        raise ValueError("advice says do not jump; nothing to taper")
+    if advice.get("taper"):
+        raise ValueError("advice is already tapered")
+    try:
+        a, b = advice["ice"]["fits"]["hyperbolic"]["params"]
+        h_now = float(advice["ice"]["X_now"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("advice carries no conduction-law fit (ice.fits.hyperbolic)")
+    N_now = float(advice["N_now_fit"])
+    N_target = float(advice["N_target"])
+    cap = float(max_ice_factor if max_ice_factor is not None
+                else advice["config"]["max_ice_factor"])
+    check_factor(cap, "max ice factor")
+
+    r_target = (N_target - a) / (N_now - a)
+    raw = solve_peak(r_target, mask, cap)
+    peak = cap if raw is None else min(raw, cap)
+    peak = max(peak, 1.0)
+    clipped = raw is None or raw > cap
+    N_after = float(a + (N_now - a) * imbalance_ratio(peak, mask))
+    f_eff = effective_factor(peak, mask)
+    offset = N_after - (a + b / (h_now * f_eff))
+
+    # years the unjumped run needs to reach N_after on the global law
+    # (Stefan: h^2 linear in time; slope recovered from the uniform advice)
+    skipped = None
+    u_f, u_skip = float(advice["ice_factor"]), advice.get("years_skipped")
+    if u_skip and u_f > 1.0 and N_after != a:
+        h2_slope = (u_f ** 2 - 1.0) * h_now ** 2 / float(u_skip)
+        h_star = b / (N_after - a)
+        if h_star > 0:
+            skipped = float((h_star ** 2 - h_now ** 2) / h2_slope)
+
+    expected = {}
+    for var, r in (advice.get("temperatures") or {}).items():
+        lin = (r.get("fits") or {}).get("linear")
+        if r.get("accepted") and lin:
+            c0, c1 = lin["params"]
+            expected[var] = float(c0 + c1 * N_after)
+
+    warnings = list(advice.get("warnings") or [])
+    if raw is None:
+        warnings.append(f"tapered jump cannot reach N_target {N_target:+.2f} at any "
+                        f"factor: capped at {cap:g}")
+    out = dict(advice)
+    out.update({
+        "schema_version": TAPERED_ADVICE_SCHEMA_VERSION,
+        "ice_factor": float(peak),
+        "ice_factor_raw": None if raw is None else float(raw),
+        "ice_factor_clipped": bool(clipped),
+        "effective_factor": f_eff,
+        "N_after": N_after,
+        "law_offset_after": float(offset),
+        "years_skipped": skipped,
+        "expected_after_jump": expected or advice.get("expected_after_jump"),
+        "warnings": warnings,
+        "taper": dict(mask.summary(), uniform={
+            k: advice.get(k) for k in ("ice_factor", "ice_factor_raw", "N_after",
+                                       "years_skipped", "expected_after_jump")}),
+    })
+    return out
