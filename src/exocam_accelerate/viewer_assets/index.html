@@ -152,7 +152,7 @@ body.ocean .ice-only, body:not(.ocean) .ocean-only { display: none; }
     </div>
     <div class="ctl ocean-only">
       <label>phase-space coordinate</label>
-      <select id="imb"><option value="energy_bot">energy_bot (surface — slab equilibrium)</option><option value="energy_top">energy_top (TOA — includes the leak)</option></select>
+      <select id="imb"><option value="energy_bot">energy_bot (surface — slab equilibrium)</option><option value="energy_top">energy_top (TOA — includes atmospheric storage)</option></select>
     </div>
     <div class="ctl">
       <label>fit window · column</label>
@@ -658,7 +658,7 @@ function renderOcean(d) {
       <div class="tile"><div class="k">TS at equilibrium</div><div class="v">${G ? fmt(G.c0, 1) : '–'}</div><div class="s">${G ? `line: TS = ${fmt(G.c0, 1)} ${sgn(G.c1, 2)}·N, r ${fmt(G.corr, 3)}` : 'no trusted line'}</div></div>
       <div class="tile"><div class="k">years skipped</div><div class="v">${a.years_skipped ? '~' + fmt(a.years_skipped, 0) : '–'}</div><div class="s">τ ${a.tau_years ? fmt(a.tau_years, 1) + ' yr' : '–'} (one box)</div></div>
       <div class="tile"><div class="k">heat capacity</div><div class="v">${a.C_eff_m_seawater ? '~' + fmt(a.C_eff_m_seawater, 0) + ' m' : '–'}</div><div class="s">of sea water, from ∑N vs TS</div></div>
-      <div class="tile"><div class="k">energy leak</div><div class="v">${a.leak && a.leak.mean !== null ? sgn(a.leak.mean, 1) : '–'}</div><div class="s">TOA − surface, W/m²</div></div>
+      <div class="tile"><div class="k">heat ratio</div><div class="v">${a.heat && a.heat.ratio ? fmt(a.heat.ratio, 2) : '–'}</div><div class="s">C<sub>total</sub>/C<sub>ocean</sub>${a.heat && a.heat.C_total ? ` = ${fmt(a.heat.C_total, 1)}/${fmt(a.heat.C_ocean, 1)}` : ''}; TOA − surface ${a.gap && a.gap.mean !== null ? sgn(a.gap.mean, 1) : '–'} W/m²</div></div>
     </div>
     ${reasons || warns ? `<ul class="msgs">${reasons}${warns}</ul>` : ''}
     ${d.jumps.length ? oceanJumpTable(d) : ''}
@@ -670,12 +670,12 @@ function renderOcean(d) {
   <div class="grid2">
     <div class="panel">
       <div class="ph"><h3>Phase space: surface temperature vs energy imbalance</h3></div>
-      <div class="cap">Annual means shaded by model year, against ${d.imbalance}. Dashed = the Gregory line the advice uses (★ = its equilibrium, N = 0); thin dotted = every fit window tried. A jump moves the state along the line from ● now to ◆ after. Grey ○ = the same years against energy_top: the horizontal gap is the atmosphere's energy leak.</div>
+      <div class="cap">Annual means shaded by model year, against ${d.imbalance}. Dashed = the Gregory line the advice uses (★ = its equilibrium, N = 0); thin dotted = every fit window tried. A jump moves the state along the line from ● now to ◆ after. Grey ○ = the same years against energy_top: the horizontal gap is the heat the atmosphere stores while it warms (the vapor column), which bends the TOA line.</div>
       <div id="p_greg" class="plot" style="height:430px"></div>
     </div>
     <div class="panel">
       <div class="ph"><h3>Where the TOA imbalance goes</h3></div>
-      <div class="cap">energy_bot (what warms the slab) against energy_top. On the 1:1 line all TOA heat reaches the ocean; a constant offset is a leak, not storage.</div>
+      <div class="cap">energy_bot (what warms the slab) against energy_top. On the 1:1 line all TOA heat reaches the ocean; below it, the atmosphere is storing the difference (it closes as the run equilibrates).</div>
       <div id="p_part" class="plot" style="height:430px"></div>
     </div>
   </div>
@@ -796,8 +796,8 @@ function plotPartition(d) {
   const all = pre.x.concat(pre.y).filter(Number.isFinite);
   const lo = Math.min(...all, 0), hi = Math.max(...all, 0);
   tr.push({ type: 'scatter', mode: 'lines', name: '1:1', x: [lo, hi], y: [lo, hi], line: { color: css('--axis'), width: 1.5, dash: 'dash' }, hoverinfo: 'skip' });
-  const L = d.advice.leak && d.advice.leak.mean;
-  if (L !== null && L !== undefined) tr.push({ type: 'scatter', mode: 'lines', name: `1:1 − leak (${sgn(L, 1)})`,
+  const L = d.advice.gap && d.advice.gap.mean;
+  if (L !== null && L !== undefined) tr.push({ type: 'scatter', mode: 'lines', name: `1:1 − window-mean gap (${sgn(L, 1)})`,
     x: [lo, hi], y: [lo - L, hi - L], line: { color: css('--series-2'), width: 1.5, dash: 'dot' }, hoverinfo: 'skip' });
   const fx = [], fy = [];
   d.years.forEach((_, i) => { if (focus(d, i)) { fx.push(S.energy_top.native[i]); fy.push(S.energy_bot.native[i]); } });
@@ -838,7 +838,7 @@ function plotProjection(d) {
 
 function plotOceanSeries(d) {
   const S = d.series;
-  const rows = [['energy_top', 'N TOA (W/m²)'], ['energy_bot', 'N surface (W/m²)'], ['leak', 'TOA − surface'], ['TS', 'TS (K)'], ['ICEFRAC', 'ICEFRAC']]
+  const rows = [['energy_top', 'N TOA (W/m²)'], ['energy_bot', 'N surface (W/m²)'], ['gap', 'TOA − surface'], ['TS', 'TS (K)'], ['ICEFRAC', 'ICEFRAC']]
     .filter(([k]) => S[k]);
   const n = rows.length, gap = 0.035, h = (1 - gap * (n - 1)) / n;
   const X = d.years.map(y => y + 0.5);

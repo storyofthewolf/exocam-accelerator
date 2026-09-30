@@ -18,7 +18,8 @@ exocam-trend files sit in DIR, what the advisor and the post-jump check see:
 Hot, ice-free cases (no ice in the latest year) are drawn in the ocean
 layout instead: TS against the surface imbalance with the Gregory line
 ``advise-ocean`` fits, the TOA points beside it (their offset is the
-atmosphere's energy leak), the one-box projection a somtp jump short-cuts,
+heat the atmosphere stores while it warms), the one-box projection a somtp
+jump short-cuts,
 and — when present in DIR — lat-lon maps of somtp and of the jump pattern
 (``*.latlon.nc`` from ``somtp-map``, ``*.pattern.nc`` from ``pattern``).
 
@@ -295,7 +296,7 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
         series[var] = entry
     if "energy_top" in series and "energy_bot" in series:
         top, bot = series["energy_top"], series["energy_bot"]
-        series["leak"] = {k: top[k] - bot[k] for k in top if k in bot}
+        series["gap"] = {k: top[k] - bot[k] for k in top if k in bot}
 
     adv = advise_ocean(columns, case, config, start_year=start_year)
     advice = adv.to_dict()

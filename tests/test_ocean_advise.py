@@ -29,22 +29,36 @@ def test_heat_capacity_and_years_skipped_are_one_box_exact():
     assert a.years_skipped == pytest.approx(TAU * np.log(2), rel=0.02)
 
 
-def test_default_coordinate_is_energy_bot_and_leak_reported():
-    cols = truncate(gregory_columns(leak=8.0), 30)
+def test_default_coordinate_is_energy_bot_and_gap_reported():
+    # atmospheric storage: energy_top = energy_bot + C_atm dTS/dt
+    cols = truncate(gregory_columns(c_atm=20.0), 30)
     a = advise_ocean(cols, "synth")
     assert a.config.imbalance == "energy_bot"
-    assert a.leak["mean"] == pytest.approx(8.0)
-    # the same run judged by energy_top would target a hotter "equilibrium"
+    assert a.gap["mean"] > 0
+    # the equilibrium from the surface line is exact; the TOA line is bent
+    assert a.gregory.fits["linear"].params[0] == pytest.approx(C0, abs=1e-6)
     top = advise_ocean(cols, "synth", OceanAdvisorConfig(imbalance="energy_top"))
-    assert top.TS_after > a.TS_after
-    assert any("leak" in w or "energy_top -> 0" in w for w in top.warnings)
+    assert any("storage" in w for w in top.warnings) or not top.jump
+
+
+def test_heat_ratio_measured_from_storage():
+    # C_ocean = -tau/c1 = 10; the atmosphere stores 20 more per K -> ratio 3
+    a = advise_ocean(truncate(gregory_columns(c_atm=20.0), 30), "synth")
+    assert a.heat["measured"]
+    assert a.heat["C_ocean"] == pytest.approx(10.0, rel=0.03)
+    assert a.heat["ratio"] == pytest.approx(3.0, rel=0.05)
+    assert a.somtp_dT == pytest.approx(a.heat["used"] * (a.TS_after - a.TS_now))
+    assert a.to_dict()["config"]["heat_ratio"] == pytest.approx(a.heat["used"])
+    big = advise_ocean(truncate(gregory_columns(c_atm=60.0), 30), "synth")
+    assert big.heat["used"] == pytest.approx(4.0)         # clipped
 
 
 def test_heat_ratio_scales_increment_not_landing():
     cols = truncate(gregory_columns(), 30)
     a = advise_ocean(cols, "synth")
+    assert a.heat["used"] == pytest.approx(1.0, abs=0.02)
     b = advise_ocean(cols, "synth", OceanAdvisorConfig(heat_ratio=1.5))
-    assert b.somtp_dT == pytest.approx(1.5 * a.somtp_dT)
+    assert b.somtp_dT == pytest.approx(1.5 * a.somtp_dT, rel=0.02)
     assert b.TS_after == pytest.approx(a.TS_after)
 
 
@@ -154,7 +168,11 @@ def test_probe_steps_by_recent_trend():
     cols = truncate(gregory_columns(tau=40.0, noise=0.02), 40)
     d = probe_ocean(cols, "synth")
     assert d["schema_version"] == OCEAN_PROBE_SCHEMA_VERSION and d["mode"] == "probe"
-    assert d["somtp_dT"] == pytest.approx(d["trend_K_per_yr"] * 15.0, rel=0.05)
+    assert d["dTS"] == pytest.approx(d["trend_K_per_yr"] * 15.0, rel=0.05)
+    s = probe_ocean(truncate(gregory_columns(tau=40.0, noise=0.02, c_atm=20.0), 40), "synth")
+    assert s["heat"]["used"] == pytest.approx(1 + 20.0 / (40.0 / 1.2), rel=0.05)
+    assert s["somtp_dT"] == pytest.approx(
+        s["heat"]["used"] * s["dTS"])
     assert d["TS_after"] == pytest.approx(d["TS_now"] + d["somtp_dT"])
     assert d["lambda_detectable"] > 0
 
@@ -163,7 +181,7 @@ def test_probe_clip_explicit_and_refusals():
     cols = truncate(gregory_columns(tau=40.0, noise=0.02), 40)
     assert probe_ocean(cols, "s", ProbeConfig(max_dT=1.0))["somtp_dT"] == pytest.approx(1.0)
     d = probe_ocean(cols, "s", ProbeConfig(probe_dT=-2.0))
-    assert d["somtp_dT"] == -2.0 and d["sizing"] == "explicit"
+    assert d["dTS"] == pytest.approx(-2.0) and d["sizing"] == "explicit"
     assert probe_ocean(truncate(gregory_columns(icefrac=0.1), 40), "s")["somtp_dT"] is None
     # a flat, noisy run: the probe would drown in the noise
     flat = gregory_columns(years=150, noise=0.5)

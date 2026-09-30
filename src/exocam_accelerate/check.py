@@ -385,6 +385,8 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     k = int(cfg.get("recent_years") or 5)
     jump_year = int(jump_log["jump_model_year"])
     applied = float(jump_log.get("somtp_dT_applied_mean", jump_log.get("somtp_dT")))
+    hr = float(cfg.get("heat_ratio") or 1.0)
+    expected = applied / hr
 
     t, N = _annual(columns, imbalance, "native")
     _, T = _annual(columns, "TS", "native")
@@ -394,7 +396,7 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     pre = (years < jump_year) & (years >= jump_year - k)
     n_post, n_set = int(post.sum()), int(settled.sum())
     reasons: List[str] = []
-    metrics: Dict[str, float] = {"somtp_dT_applied": applied, "dTS_expected": applied}
+    metrics: Dict[str, float] = {"somtp_dT_applied": applied, "dTS_expected": expected}
 
     def done(verdict):
         return CheckResult(verdict, reasons, jump_year, n_post, n_set, metrics)
@@ -414,11 +416,13 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     TS_before = float(advice.get("TS_now", T[pre][-1]))
     moved = float(T[post][0]) - TS_before - drift
     metrics.update(TS_first=float(T[post][0]), dTS_first=moved,
-                   land_fraction=moved / applied if applied else float("nan"))
-    if (moved / applied < config.min_land_fraction
-            and abs(applied - moved) > config.land_sigmas * sig_T):
+                   land_fraction=moved / expected if expected else float("nan"))
+    if moved * applied > 0:
+        metrics["heat_ratio_implied"] = applied / moved
+    if (moved / expected < config.min_land_fraction
+            and abs(expected - moved) > config.land_sigmas * sig_T):
         reasons.append(f"probe did not land: first post-probe TS moved {moved:+.2f} K "
-                       f"(net of drift) vs {applied:+.2f}; was the edited docn.r the "
+                       f"(net of drift) vs {expected:+.2f}; was the edited docn.r the "
                        f"one the run read?")
         return done(Verdict.FAIL)
     if n_set < config.min_years:

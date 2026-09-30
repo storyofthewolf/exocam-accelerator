@@ -18,30 +18,30 @@ the classic one:
   so ``dTS = c1*(N_target - N_now)``.
 
 Which imbalance. The slab ocean is in equilibrium when the net surface flux
-into it vanishes (``energy_bot`` = 0; q-flux integrates to zero), and in the
-hot runs it is the only reservoir the trend data can see: ``energy_bot`` =
-C dTS/dt with C = the 50 m mixed layer and no offset (atlasfu D1-D5, 2026-09-30).
-``energy_top`` differs from it by a near-constant offset that does not track
-the warming rate — an atmospheric energy leak, up to ~10 W/m2 in the 4-bar
-runs near 370 K — so ``energy_top`` -> 0 is not the equilibrium and a Gregory
-line in it would overshoot by 5-15 K. The default coordinate is therefore
-``energy_bot``; the leak (``energy_top - energy_bot`` over the window) is
-reported.
+into it vanishes (``energy_bot`` = 0; q-flux integrates to zero): ``energy_bot``
+= C_ocean dTS/dt with C_ocean the mixed layer. ``energy_top`` exceeds it by the
+heat the atmosphere stores while it warms, C_atm dTS/dt — and in these hot,
+thick atmospheres C_atm is the latent heat of the vapor column, growing
+steeply with T (2-4x C_ocean at 365-375 K; an equilibrated 3-bar CO2 run shows
+the gap closing to ~0.4 W/m2 at equilibrium, 2026-09-30). The storage term
+bends a Gregory line in ``energy_top`` (in the 3-bar run it is refused until
+the last few years, and on atlasfu it put the equilibrium 1.5-7 K too hot), so
+the coordinate is ``energy_bot``; the gap is reported.
 
-Where the heat goes. Only somtp is edited. Whatever heat the atmosphere must
-store to follow the surface (dry enthalpy plus, at 340-370 K, the vapor
-column) is taken back from the mixed layer in the first weeks, so the run
-lands short of the target by C_ocean / (C_ocean + C_atm). The trend data do
-not resolve C_atm (it is collinear with the leak's temperature dependence),
-so the default ``heat_ratio`` = 1 jumps somtp by the TS change; a first jump's
-landing (``check``) measures the ratio for the next one.
+Where the heat goes. Only somtp is edited, so the heat the atmosphere must
+store to follow the surface is taken back from the mixed layer within weeks:
+the run lands short of the target by C_ocean / (C_ocean + C_atm). The advisor
+measures that ratio over the fit window, ``heat_ratio = C_total / C_ocean``
+from the heat taken up (sum of energy_top, resp. energy_bot, against TS), and
+scales the somtp increment by it; ``check`` reports the ratio the first
+post-jump year implies.
 
 Reported for the post-jump check and for judging the value of a jump:
 
 * ``N_after``, ``TS_after`` — where the run should sit on the Gregory line;
 * ``C_eff = N / (dTS/dt)`` over the window — the effective heat capacity the
   run is showing (also in metres of sea water, to compare with ``hblt``);
-* the leak, mean ``energy_top - energy_bot`` over the window;
+* the storage gap, mean ``energy_top - energy_bot`` over the window;
 * ``years_skipped = tau*ln(N_now/N_after)`` with ``tau = -c1*C_eff`` — the
   one-box relaxation time the run would have needed.
 
@@ -91,9 +91,11 @@ class OceanAdvisorConfig:
     #: worth a restart edit (it would be lost in the year-to-year swings), K
     min_dT: float = 0.2
     noise_factor: float = 1.0
-    #: somtp increment / TS change: 1 = no allowance for the heat the
-    #: atmosphere takes back from the ocean after the jump
-    heat_ratio: float = 1.0
+    #: somtp increment / TS change. None = measured (C_total / C_ocean over
+    #: the window, clipped to [1, max_heat_ratio]); 1 = no allowance for the
+    #: heat the atmosphere takes back from the ocean after the jump
+    heat_ratio: Optional[float] = None
+    max_heat_ratio: float = 4.0
     #: the regime is ice-free: refuse above this ICEFRAC anywhere in the window
     max_icefrac: float = 0.001
     #: the current state (mean of the last ``recent_years`` native years) must
@@ -131,9 +133,11 @@ class OceanAdvisorConfig:
                              f"{self.max_dT!r}")
         if self.min_dT < 0:
             raise ValueError("min_dT must be non-negative")
-        if not (1.0 <= self.heat_ratio <= 3.0):
-            raise ValueError(f"heat_ratio must satisfy 1 <= heat_ratio <= 3, got "
+        if self.heat_ratio is not None and not (1.0 <= self.heat_ratio <= 5.0):
+            raise ValueError(f"heat_ratio must satisfy 1 <= heat_ratio <= 5, got "
                              f"{self.heat_ratio!r}")
+        if not (1.0 <= self.max_heat_ratio <= 5.0):
+            raise ValueError("max_heat_ratio must be in [1, 5]")
         if self.imbalance not in ("energy_bot", "energy_top"):
             raise ValueError(f"imbalance must be energy_bot or energy_top, got "
                              f"{self.imbalance!r}")
@@ -162,7 +166,7 @@ class OceanAdvice:
     since_year: Optional[int]
     detected_jumps: Tuple[int, ...]
     gregory: Optional[PhaseExtrapolation]
-    leak: dict                    # mean/trend of energy_top - energy_bot, window
+    gap: dict                     # mean/trend of energy_top - energy_bot (storage)
     dTS_target: Optional[float]   # TS change the target asks for
     somtp_dT: Optional[float]     # None -> do not jump
     somtp_dT_raw: Optional[float]
@@ -177,6 +181,8 @@ class OceanAdvice:
     provenance: Optional[Dict[str, str]] = None
     #: every window tried: {window, c0, c1, corr, offline, status}
     windows_tried: tuple = ()
+    #: heat ratio: C_ocean, C_total (W yr m-2 K-1), ratio, used, measured
+    heat: dict = field(default_factory=dict)
 
     @property
     def jump(self) -> bool:
@@ -214,10 +220,13 @@ class OceanAdvice:
             "config": {"n_fraction": c.n_fraction, "N_target": c.N_target,
                        "max_dT": c.max_dT, "min_dT": c.min_dT,
                        "noise_factor": c.noise_factor, "max_offline": c.max_offline,
-                       "heat_ratio": c.heat_ratio,
+                       "heat_ratio": self.heat.get("used", 1.0),
+                       "heat_ratio_setting": c.heat_ratio,
                        "imbalance": c.imbalance, "max_icefrac": c.max_icefrac},
             "gregory": greg,
-            "leak": {k: num(v) for k, v in self.leak.items()},
+            "gap": {k: num(v) for k, v in self.gap.items()},
+            "heat": {k: (num(v) if isinstance(v, float) else v)
+                     for k, v in self.heat.items()},
             "dTS_target": num(self.dTS_target),
             "somtp_dT": num(self.somtp_dT),
             "somtp_dT_raw": num(self.somtp_dT_raw),
@@ -268,8 +277,9 @@ def detect_ts_jumps(years, ts, dT: float = 1.0, k_noise: float = 4.0,
     return out
 
 
-def _leak(columns, which, mask) -> dict:
-    """``energy_top - energy_bot`` over the window: mean (W/m2) and trend (W/m2/yr)."""
+def _gap(columns, which, mask) -> dict:
+    """``energy_top - energy_bot`` over the window — the heat the atmosphere is
+    storing (plus any leak): mean (W/m2) and trend (W/m2/yr)."""
     if not (_have(columns, "energy_top", which) and _have(columns, "energy_bot", which)):
         return {"mean": None, "trend_per_yr": None}
     t, top = _annual(columns, "energy_top", which)
@@ -280,6 +290,61 @@ def _leak(columns, which, mask) -> dict:
         return {"mean": None, "trend_per_yr": None}
     return {"mean": float(g[ok].mean()),
             "trend_per_yr": float(np.polyfit(t[mask][ok], g[ok], 1)[0])}
+
+
+def _scatter(x) -> float:
+    """Interannual scatter about a quadratic (a fast, decelerating approach is
+    not noise)."""
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size < 4:
+        return 0.0
+    i = np.arange(x.size)
+    return float(np.std(x - np.polyval(np.polyfit(i, x, 2), i), ddof=3))
+
+
+def _heat_capacity(N, TS) -> Optional[float]:
+    """Slope of the heat taken up (sum of annual N to mid-year, W yr m-2)
+    against TS: the heat capacity behind that flux, for any trajectory."""
+    ok = np.isfinite(N) & np.isfinite(TS)
+    if ok.sum() < 3:
+        return None
+    Nk = N[ok]
+    Q = np.cumsum(Nk) - 0.5 * Nk
+    return float(np.polyfit(TS[ok], Q, 1)[0])
+
+
+def measure_heat_ratio(columns, mask, setting: Optional[float] = None,
+                       max_ratio: float = 4.0, min_dTS: float = 1.0) -> dict:
+    """C_total / C_ocean over ``mask`` (annual native means): how much larger a
+    somtp increment must be than the TS change it buys, once the atmosphere
+    has taken its share. ``setting`` (a number) overrides the measurement."""
+    out = {"C_ocean": None, "C_total": None, "ratio": None, "used": 1.0,
+           "measured": False, "reason": None}
+    if _have(columns, "energy_top", "native") and _have(columns, "energy_bot", "native"):
+        _, T = _annual(columns, SURFACE_VAR, "native")
+        _, Nt = _annual(columns, "energy_top", "native")
+        _, Nb = _annual(columns, "energy_bot", "native")
+        m = np.asarray(mask, dtype=bool)
+        if m.sum() >= 3 and np.ptp(T[m][np.isfinite(T[m])]) >= min_dTS:
+            Co, Ct = _heat_capacity(Nb[m], T[m]), _heat_capacity(Nt[m], T[m])
+            out.update(C_ocean=Co, C_total=Ct)
+            if Co and Ct and Co > 0 and Ct > 0:
+                out.update(ratio=Ct / Co, measured=True)
+            else:
+                out["reason"] = "heat capacities not positive over the window"
+        else:
+            out["reason"] = f"TS changed by < {min_dTS:g} K over the window"
+    else:
+        out["reason"] = "no energy_top / energy_bot series"
+    if setting is not None:
+        out["used"] = float(setting)
+        out["reason"] = "set explicitly"
+    elif out["measured"]:
+        out["used"] = float(min(max(out["ratio"], 1.0), max_ratio))
+        if out["used"] != out["ratio"]:
+            out["reason"] = f"measured {out['ratio']:.2f} clipped to {out['used']:.2f}"
+    return out
 
 
 def advise_ocean(columns: Dict[str, np.ndarray], case: str,
@@ -328,14 +393,14 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
     cap = float(usable.sum())
 
     def result(N_now_fit=float("nan"), N_target=float("nan"), window=0.0, greg=None,
-               leak=None, dTS=None, dT=None, raw=None, clipped=False, TS_after=None,
-               N_after=None, C_eff=None, tau=None, skipped=None):
+               gap=None, dTS=None, dT=None, raw=None, clipped=False, TS_after=None,
+               N_after=None, C_eff=None, tau=None, skipped=None, heat=None):
         return OceanAdvice(case, model_year, N_now, float(N_now_fit), float(N_target),
                            float(TS_nat[-1]) if TS_nat is not None else float("nan"),
                            config, which, float(window), since, tuple(detected), greg,
-                           leak or {}, dTS, dT, raw, clipped, TS_after, N_after, C_eff,
+                           gap or {}, dTS, dT, raw, clipped, TS_after, N_after, C_eff,
                            tau, skipped, tuple(reasons), tuple(warnings), provenance,
-                           tuple(windows))
+                           tuple(windows), heat or {})
 
     if not have_T:
         reasons.append(f"no {SURFACE_VAR} series in the trend output")
@@ -394,8 +459,7 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
     tol_off = max(config.max_offline, 2.0 * sig / np.sqrt(max(k, 1)))
     ttail = TS_nat[-2 * k:]
     ttail = ttail[np.isfinite(ttail)]
-    sig_T = float(np.std(ttail - np.polyval(np.polyfit(np.arange(ttail.size), ttail, 1),
-                                            np.arange(ttail.size)))) if ttail.size > 2 else 0.0
+    sig_T = _scatter(ttail)
     min_move = max(config.min_dT, config.noise_factor * sig_T)
 
     chosen = None
@@ -435,7 +499,7 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
                        + " | ".join(tried) if tried else
                        "no window with a usable TS(N) relation")
         return result(window=cands[0],
-                      leak=_leak(columns, which, usable & (t > t[-1] - cands[0])))
+                      gap=_gap(columns, which, usable & (t > t[-1] - cands[0])))
     window, w, lin = chosen
     c0, c1 = lin.params
     N_now_fit = (TS_now - c0) / c1
@@ -460,12 +524,12 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
     greg = extrapolate(SURFACE_VAR, N_fit[w], T_fit[w], N_target, TS_now, "linear", gate)
     reasons.extend(greg.reasons)
 
-    leak = _leak(columns, which, w)
-    if (config.imbalance == "energy_top" and leak["mean"] is not None
-            and abs(leak["mean"]) > 1.0):
-        warnings.append(f"energy_top - energy_bot = {leak['mean']:+.1f} W/m2 over the "
-                        f"window: energy_top -> 0 is not the ocean's equilibrium; "
-                        f"prefer the energy_bot coordinate")
+    gap = _gap(columns, which, w)
+    if (config.imbalance == "energy_top" and gap["mean"] is not None
+            and abs(gap["mean"]) > 1.0):
+        warnings.append(f"energy_top - energy_bot = {gap['mean']:+.1f} W/m2 over the "
+                        f"window (atmospheric heat storage): it bends the TOA Gregory "
+                        f"line — prefer the energy_bot coordinate")
 
     # ---- effective heat capacity and relaxation time ----
     # The heat taken up since the window start, sum(N dt), against TS: its
@@ -482,29 +546,37 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
             C_eff = C
             tau = -c1 * C_eff
 
+    heat = measure_heat_ratio(columns, w, config.heat_ratio, config.max_heat_ratio)
+    hr = heat["used"]
+    if config.heat_ratio is None and not heat["measured"]:
+        warnings.append(f"heat ratio not measured ({heat['reason']}): somtp moves by "
+                        f"the TS change alone and the run will land short")
+    elif heat.get("reason") and config.heat_ratio is None:
+        warnings.append(f"heat ratio {heat['reason']}")
+
     dTS = dT = raw = TS_after = N_after = skipped = None
     clipped = False
     if not reasons:
         dTS = float(greg.prediction - TS_now)
-        raw = dTS * config.heat_ratio
+        raw = dTS * hr
         dT = float(np.clip(raw, -config.max_dT, config.max_dT))
         clipped = dT != raw
         if clipped:
             warnings.append(f"somtp increment {raw:+.2f} K clipped to {dT:+.2f} K")
-        if abs(dT / config.heat_ratio) < min_move:
+        if abs(dT / hr) < min_move:
             reasons.append(f"the jump would move TS by only "
-                           f"{dT / config.heat_ratio:+.2f} K (< {min_move:.2f} K: the "
+                           f"{dT / hr:+.2f} K (< {min_move:.2f} K: the "
                            f"larger of {config.min_dT:g} and the interannual TS "
                            f"scatter): not worth a restart edit — near equilibrium")
             dT = raw = None
             clipped = False
         else:
-            TS_after = TS_now + dT / config.heat_ratio
+            TS_after = TS_now + dT / hr
             N_after = float((TS_after - c0) / c1)
             if tau is not None and N_now_fit * N_after > 0 and abs(N_after) < abs(N_now_fit):
                 skipped = float(tau * np.log(N_now_fit / N_after))
-    return result(N_now_fit, N_target, window, greg, leak, dTS if dT is not None else None,
-                  dT, raw, clipped, TS_after, N_after, C_eff, tau, skipped)
+    return result(N_now_fit, N_target, window, greg, gap, dTS if dT is not None else None,
+                  dT, raw, clipped, TS_after, N_after, C_eff, tau, skipped, heat)
 
 
 def pattern_advice(advice: dict, summary: dict) -> dict:
@@ -557,6 +629,9 @@ class ProbeConfig:
     max_dT: float = 10.0
     #: the probe must exceed this many interannual TS sigmas (so it is visible)
     min_sigmas: float = 3.0
+    #: somtp increment / TS step; None = measured over the trend window
+    heat_ratio: Optional[float] = None
+    max_heat_ratio: float = 4.0
     #: years averaged for the pre-probe point and in the lambda estimate
     recent_years: int = 5
     imbalance: str = "energy_bot"
@@ -626,7 +701,11 @@ def probe_ocean(columns: Dict[str, np.ndarray], case: str,
         step = propose_step(TrendSeries(t[w], T[w]), config.probe_years, config.max_dT,
                             GateConfig())
         tr = np.polyfit(t[w], T[w], 1)
-        sig_T = float(np.std(T[w] - np.polyval(tr, t[w]), ddof=2))
+        sig_T = _scatter(T[w])
+        heat = measure_heat_ratio(columns, w, config.heat_ratio, config.max_heat_ratio)
+        hr = heat["used"]
+        out["heat"] = heat
+        out["config"]["heat_ratio"] = hr
         Nr = N[w][-k:]
         sig_N = float(np.std(N[w] - np.polyval(np.polyfit(t[w], N[w], 1), t[w]), ddof=2))
         out.update(TS_now=float(T[-1]), trend_K_per_yr=float(tr[0]), sigma_TS=sig_T,
@@ -638,9 +717,11 @@ def probe_ocean(columns: Dict[str, np.ndarray], case: str,
             se = float(np.sqrt(a.var(ddof=1) / k + b.var(ddof=1) / k))
             out["lambda_recent"] = {"value": float(-(b.mean() - a.mean()) / dTp),
                                     "se": abs(se / dTp), "dTS": dTp}
+        # the probe is a TS step; somtp moves by heat_ratio x that (the
+        # atmosphere takes the rest back within weeks)
         if config.probe_dT is not None:
-            dT = float(np.clip(config.probe_dT, -config.max_dT, config.max_dT))
-            out["somtp_dT_raw"] = float(config.probe_dT)
+            dT = float(np.clip(config.probe_dT * hr, -config.max_dT, config.max_dT))
+            out["somtp_dT_raw"] = float(config.probe_dT * hr)
             out["somtp_dT_clipped"] = dT != config.probe_dT
             out["sizing"] = "explicit"
             if not step.accepted:
@@ -649,24 +730,26 @@ def probe_ocean(columns: Dict[str, np.ndarray], case: str,
         elif not step.accepted:
             reasons.extend(step.gate.reasons)
         else:
-            dT = float(step.delta)
-            out["somtp_dT_raw"] = float(step.tendency * config.probe_years)
-            out["somtp_dT_clipped"] = bool(step.clip.any_clipped)
+            raw = float(step.tendency * config.probe_years * hr)
+            dT = float(np.clip(raw, -config.max_dT, config.max_dT))
+            out["somtp_dT_raw"] = raw
+            out["somtp_dT_clipped"] = dT != raw
             out["sizing"] = "trend"
         if not reasons:
-            if abs(dT) < config.min_sigmas * sig_T:
-                reasons.append(f"probe {dT:+.2f} K is within {config.min_sigmas:g} "
+            dTS = dT / hr
+            if abs(dTS) < config.min_sigmas * sig_T:
+                reasons.append(f"probe {dTS:+.2f} K (TS) is within {config.min_sigmas:g} "
                                f"interannual TS sigmas ({sig_T:.2f} K): its response "
                                f"would not be readable — lengthen --probe-years")
             else:
                 n = k
                 se_dN = sig_N * np.sqrt(2.0 / n)
-                out.update(somtp_dT=dT, TS_after=float(T[-1] + dT),
-                           expected_after_jump={"TS": float(T[-1] + dT)},
+                out.update(somtp_dT=dT, dTS=dTS, TS_after=float(T[-1] + dTS),
+                           expected_after_jump={"TS": float(T[-1] + dTS)},
                            # smallest lambda the check can tell from zero
-                           lambda_detectable=float(2.0 * se_dN / abs(dT)),
-                           years_skipped=(float(config.probe_years) if out["sizing"] == "trend"
-                               else float(abs(dT / tr[0])) if tr[0] * dT > 0 else None))
+                           lambda_detectable=float(2.0 * se_dN / abs(dTS)),
+                           years_skipped=(float(abs(dTS / tr[0])) if tr[0] * dTS > 0
+                                          else None))
                 if out["somtp_dT_clipped"]:
                     warnings.append(f"probe {out['somtp_dT_raw']:+.2f} K clipped to "
                                     f"{dT:+.2f} K")

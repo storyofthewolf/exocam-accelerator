@@ -142,7 +142,7 @@ def test_ocean_regime_payload():
     p = any_payload(cols, "hot", 1, {"n_fraction": ["0.5"]}, None, [])
     assert p["regime"] == "ocean" and p["gregory"]["after"] is not None
     assert p["gregory"]["projection"]["TS_jumped"] is not None
-    assert "leak" in p["series"] and p["tried"]
+    assert "gap" in p["series"] and p["tried"]
     row = case_summary(p)
     assert row["regime"] == "ocean" and row["somtp_dT"] > 0 and not row["refused"]
     import json

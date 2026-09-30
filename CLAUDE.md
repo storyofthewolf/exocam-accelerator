@@ -61,11 +61,12 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   in-place edit of `docn.r` `somtp` (K, lon-fastest `gsize = ni*nj` on the
   docn domain named in `docn_ocn_in`), same backup/log/pre-flight/check/
   rollback machinery, plain continuation. Phase-space coordinate is
-  **`energy_bot`** (the slab's own equilibrium): `energy_top` carries an
-  atmospheric energy leak of up to ~10 W/m² in the 4-bar atlasfu runs. Gregory
-  line TS(N_bot), current state must lie on it (refuses the steepening D4/D5),
-  jump floor = interannual TS scatter, `--heat-ratio` (default 1) for heat the
-  atmosphere takes back. Uniform by default; `pattern` = measured warming
+  **`energy_bot`** (the slab's own equilibrium): `energy_top − energy_bot` is
+  heat stored by the atmosphere (vapor column; shown by an equilibrated 3-bar
+  run where it closes to ~0), which bends a TOA Gregory line — NOT a leak (an
+  earlier reading, corrected). Gregory line TS(N_bot), current state must lie
+  on it, jump floor = interannual TS scatter; somtp increment × measured
+  heat ratio C_total/C_ocean (~1.4 at 338 K, ~3.4 at 370 K; clip [1, 4]). Uniform by default; `pattern` = measured warming
   pattern (user asked for both). **Probe mode** (user decision: flattening N
   is not proof of runaway; a warm perturbation maps the trajectory): step
   = recent TS trend × probe_years behind the time-domain gate, or explicit;

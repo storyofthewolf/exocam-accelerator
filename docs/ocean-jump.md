@@ -23,40 +23,57 @@ From ExoCAM `docn_comp_mod.F90` (SOM mode):
 
 `exocam-accelerate somtp-map` writes `somtp(lat, lon)` as an ordinary netCDF.
 
-## Finding 1: the equilibrium is energy_bot = 0, not energy_top = 0
+## Finding 1: the equilibrium is energy_bot = 0; the TOA gap is atmospheric storage
 
 The TOA imbalance (`energy_top`, what `runmgr check --energy` reports as Etop)
-exceeds the surface imbalance (`energy_bot`, net flux into the slab) by a
-near-constant offset: ~10 W/m² in D4/D5, ~3 in D1/D2, ≲1–2 in D3. Two
-readings: heat being stored in the atmosphere (dry enthalpy plus a large vapor
-column), or an energy leak in the atmosphere. The data decide it:
+exceeds the surface imbalance (`energy_bot`, net flux into the slab). In the
+atlasfu runs the gap is ~1–2 W/m² in D1–D3 and 6–9 W/m² in D4/D5 over their
+last 15 years.
 
-- `energy_bot = C·dTS/dt` with C = 6.4–7.4 W·yr/m²/K and intercept ≈ 0 in
-  D1–D5. That is a 50 m mixed layer (`hblt` = 50 m, 6.5 W·yr/m²/K) — the slab
-  alone explains how TS evolves.
-- `energy_top − energy_bot` does not track dTS/dt; the regressions give an
-  atmospheric heat capacity indistinguishable from zero (or negative), plus a
-  large intercept. It is a leak (energy non-conservation), not storage.
-- The advisor's cumulative-heat estimate (∑N_bot·dt against TS) gives
-  C_eff = 51–56 m of sea water for D1–D3.
+*Corrected 2026-09-30 (same day).* I first read the gap as an energy leak,
+because `energy_top − energy_bot` did not regress cleanly on dTS/dt. That
+regression cannot separate storage whose capacity grows with T from a leak
+that grows with T. An **equilibrated 3-bar CO2 run** (`scratch/CO2_2949120ppm.dat`,
+59 yr, 303 → 375 K) settles it:
 
-So in these runs the slab ocean is the only reservoir the trend data can see,
-and its equilibrium is where the net surface flux vanishes. A Gregory line in
-`energy_top` puts the equilibrium where the leak is cancelled, 5–15 K too hot
-(D4: 372–382 K against 366–372 K in `energy_bot`). Hindcast, advice at every
-year and scored against the run's TS after the predicted `years_skipped`:
-median error −0.6 to +0.5 K with `energy_bot` (D2–D5) against +1.5 to +6.9 K
-with `energy_top`. `advise-ocean` therefore fits against `energy_bot` by
-default and reports the leak.
+- the gap is 30–38 W/m² while TS rises fast and closes to 0.36 W/m² once TS is
+  flat (years 35–59): it is heat the atmosphere stores while it warms, not a
+  leak;
+- the atmosphere's heat capacity (gap / dTS/dt, or the slope of the cumulative
+  `energy_top − energy_bot` against TS) grows from ~4 at 345 K to ~16–21
+  W·yr/m²/K at 369–374 K. A Clausius–Clapeyron estimate of the vapor column's
+  latent heat at 375 K gives ~15, plus ~1 for 3 bar of dry CO2: it is the
+  water-vapor reservoir;
+- using that C_atm(T), the storage it implies explains the atlasfu gaps to
+  ±0.7 W/m² (D1–D3, late D5); D4 has 2–4 W/m² more, plausibly its larger 4-bar
+  atmosphere.
 
-The runs do not equilibrate slowly because of a large heat capacity (it is
-just the 50 m slab) but because the feedback is weak: λ ≈ 0.3–0.5 W/m²/K,
-τ = C/λ ≈ 10–20 yr.
+Consequences:
+
+- `energy_bot` is still the right coordinate: the slab's equilibrium is where
+  the net surface flux vanishes, and the storage term C_atm(T)·dTS/dt bends a
+  TOA Gregory line. In the 3-bar hindcast the `energy_bot` line puts the
+  equilibrium within +0.5 K of the true 375.1 K from year 16 (+1–2 K at years
+  12–14); the `energy_top` line is refused until year 28. On atlasfu the TOA
+  line put it 1.5–7 K too hot.
+- **An ocean-only jump lands at C_ocean / (C_ocean + C_atm) of its size.** The
+  advisor now measures `heat_ratio = C_total / C_ocean` from the cumulative
+  heat uptake (∑energy_top, ∑energy_bot against TS) and scales the somtp
+  increment by it, clipped to [1, 4]. Measured: ~1.4 (D1, 338 K), ~1.5 (D2),
+  ~2.2 (D3, 356 K), ~3.4 (D4, D5 and the 3-bar run at 369–375 K). At 370 K a
+  somtp increment of 10 K buys ~3 K of TS; the extra heat goes to the vapor
+  column within weeks, a transient SST overshoot of the jump size.
+- The mixed layer shows up as C_ocean ≈ 6.4–7.4 W·yr/m²/K (≈ 50 m, `hblt`).
+
+`runmgr check --energy`'s Etop therefore lags convergence (it includes the
+storage term) but is not biased at equilibrium.
 
 ## Finding 2: the TS(N) relation steepens in the hottest runs
 
 D4/D5 warm steadily (0.33 and 0.55 K/yr over the last 15 years) while
-`energy_bot` falls only slowly. The local slope dTS/dN_bot steepens from ~−1.3
+`energy_bot` falls only slowly. (The equilibrated 3-bar run shows the same
+steepening near its end — λ_surf falls from 1.5 to 0.8 W/m²/K between 360
+and 375 K — and still converges smoothly: steepening is not a runaway.) The local slope dTS/dN_bot steepens from ~−1.3
 (20–40 yr windows) to −2.7…−4.9 K per W/m² (last 10–20 yr): sensitivity rising
 with temperature. A long window's line then passes *below* the current state,
 and naive advice for D4 is a −0.4 K (cooling) jump in a run that is still
@@ -84,12 +101,11 @@ short to fit.
   longest trusted window (the saturating form alongside; disagreement = kink,
   refused); `c1 < 0` required.
 - Target: remove `--n-fraction` (0.5) of the current imbalance;
-  `dTS = c1·(N_target − N_now)`; somtp increment `= dTS × --heat-ratio`,
+  `dTS = c1·(N_target − N_now)`; somtp increment `= dTS × heat_ratio`,
   clipped at `--max-dt` (10 K; hard bound 25 K per cell).
-- `--heat-ratio` (default 1) covers heat the atmosphere might take back from
-  the ocean after the jump. The trend data do not resolve it (Finding 1 says
-  it is small); `check` reports the ratio implied by the first post-jump year,
-  which calibrates the next jump.
+- The somtp increment is `dTS × heat_ratio`, the ratio measured over the fit
+  window (Finding 1; `--heat-ratio` overrides). `check` reports the ratio the
+  first post-jump year implies, which tests the measurement.
 - Uniform by default. `pattern` scales each cell by its warming rate between
   two archived docn.r (3×3 box-smoothed, weights clipped to [0, 3], area mean
   1). On D4 (0041→0051) the weights span 0.54–1.56, std 0.14: the warming is
@@ -115,12 +131,13 @@ simply unconstrained: over the last 10 yr D4's `energy_bot` changes by
 
 `advise-ocean --probe` therefore offers a jump that is *not* sized to an
 equilibrium: TS is stepped ahead by the run's own recent trend ×
-`--probe-years` (15), i.e. forward Euler behind the settled time-domain
+`--probe-years` (15) — a TS step; somtp moves by the measured heat ratio times
+that — i.e. forward Euler behind the settled time-domain
 trustworthiness gate and the hard clip (or `--probe-dt` explicitly, which
 skips the gate — D2's ±2 K swings fail it). It reports the smallest λ the
 check will resolve after 5 settled years and the λ above which the probe
-overshoots (`N_now/ΔT`). At year 50: D4 +4.9 K (resolves λ ≥ 0.45, overshoots
-if λ > 0.46), D5 +8.1 K (λ ≥ 0.18); a +3 K probe on D2 only resolves λ ≳ 3
+overshoots (`N_now/ΔT`). With the heat ratio (~3.4) the 10 K clip binds at year 50: D4
++10 K somtp for +2.9 K of TS, D5 +10 K for +3.0 K; a +3 K probe on D2 only resolves λ ≳ 3
 (σ of energy_bot ≈ 7 W/m²).
 
 The probe check (`check.check_ocean_probe`) compares the settled post-probe
@@ -153,6 +170,8 @@ the outcome fan: where the post-probe state lands for each λ.
   the physics-buffer copies (`TCWAT` — the stratiform scheme's previous-step T
   —, `T_TTEND`, `QRS/QRL`) and cam.rs/cpl.r snapshots must follow. exocam-trend
   has no per-level series yet. Needs a user decision.
-- The atmospheric energy leak itself (up to ~10 W/m²) is a model-conservation
-  issue outside this tool, but it matters for anyone reading Etop as a
-  convergence metric in these runs.
+- Atmosphere jumps would also address the heat-ratio problem: at 370 K
+  about three quarters of the heat a TS step needs goes into the vapor column,
+  so an ocean-only jump must overshoot SST by ~3× (e.g. +10 K for +3 K of TS).
+  Raising the atmosphere's T and Q (fixed RH) with the ocean would avoid that
+  transient. Open.

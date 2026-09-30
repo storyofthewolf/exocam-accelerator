@@ -22,7 +22,9 @@ view      local interactive viewer (http://127.0.0.1:8765) of the trend files an
 
 Hot, ice-free regime — som_ocean plugin, docn.r somtp:
 advise-ocean  fit TS against the surface imbalance energy_bot (the slab ocean's
-              own equilibrium; energy_top carries the atmosphere's energy leak),
+              own equilibrium; energy_top also carries the heat the atmosphere
+              stores while it warms), print the recommended somtp increment,
+              scaled by the measured heat ratio C_total/C_ocean
               print the recommended somtp increment (--json saves it).
 pattern       optional: shape the increment by the local warming rate between
               two archived docn.r restarts (area mean unchanged).
@@ -194,8 +196,9 @@ def _print_probe(d, json_path) -> int:
     else:
         how = (f"{d['config']['probe_years']:g} yr of the recent trend"
                if d.get("sizing") == "trend" else "explicit --probe-dt")
-        print(f"PROBE somtp increment: {d['somtp_dT']:+.3f} K ({how})")
-        print(f"  TS {d['TS_now']:.2f} -> {d['TS_after']:.2f} K; after "
+        print(f"PROBE somtp increment: {d['somtp_dT']:+.3f} K ({how}; heat ratio "
+              f"{d['heat']['used']:.2f})")
+        print(f"  TS {d['TS_now']:.2f} -> {d['TS_after']:.2f} K ({d['dTS']:+.2f}); after "
               f"{d['config']['recent_years']} settled years 'check' resolves "
               f"lambda >= ~{d['lambda_detectable']:.2f} W/m2/K")
     if json_path:
@@ -217,7 +220,8 @@ def cmd_advise_ocean(args) -> int:
                   f"year {since}")
     if args.probe or args.probe_dt is not None:
         pc = ProbeConfig(probe_years=args.probe_years, probe_dT=args.probe_dt,
-                         max_dT=args.max_dt, imbalance=args.imbalance, since_year=since)
+                         max_dT=args.max_dt, imbalance=args.imbalance, since_year=since,
+                         heat_ratio=args.heat_ratio)
         d = probe_ocean(cols, args.case, pc, start_year=_start_year(args),
                         provenance=file_provenance(args.trend_dir, args.case))
         return _print_probe(d, args.json)
@@ -239,10 +243,14 @@ def cmd_advise_ocean(args) -> int:
         c0, c1 = g.fits["linear"].params
         print(f"Gregory line: TS = {c0:.2f} {c1:+.3f}*N   corr {g.fits['linear'].corr:+.3f}"
               f"   TS at N=0: {c0:.2f} K")
-    lk = d["leak"]
+    lk = d["gap"]
     if lk.get("mean") is not None:
         print(f"energy_top - energy_bot over the window: {lk['mean']:+.2f} W/m2 "
-              f"(atmospheric energy leak; trend {lk['trend_per_yr']:+.3f}/yr)")
+              f"(heat stored by the atmosphere; trend {lk['trend_per_yr']:+.3f}/yr)")
+    h = d["heat"]
+    if h.get("measured"):
+        print(f"heat capacities: ocean {h['C_ocean']:.1f}, total {h['C_total']:.1f} "
+              f"W yr/m2/K -> heat ratio {h['ratio']:.2f} (used {h['used']:.2f})")
     if d["C_eff_m_seawater"] is not None:
         print(f"effective heat capacity {d['C_eff_W_yr_m2_K']:.2f} W yr/m2/K "
               f"(~{d['C_eff_m_seawater']:.0f} m of sea water)   relaxation time "
@@ -257,7 +265,7 @@ def cmd_advise_ocean(args) -> int:
     else:
         note = (f" (clipped from {adv.somtp_dT_raw:+.3f})" if adv.clipped else "")
         print(f"RECOMMENDED somtp increment: {adv.somtp_dT:+.3f} K{note}"
-              f"   (heat ratio {cfg.heat_ratio:g})")
+              f"   (heat ratio {adv.heat['used']:.2f})")
         print(f"  TS {adv.TS_now:.2f} -> {adv.TS_after:.2f} K; skips ~"
               f"{_fmt(adv.years_skipped, 3)} model years")
         print(f"  expected after adjustment: {cfg.imbalance} ~ {adv.N_after:+.2f} W/m2")
@@ -683,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--imbalance", default="energy_bot",
                    choices=["energy_bot", "energy_top"],
                    help="phase-space coordinate (energy_bot: the slab's own "
-                        "equilibrium; energy_top includes the atmosphere's leak)")
+                        "equilibrium; energy_top includes atmospheric storage)")
     o.add_argument("--since", type=int, default=None,
                    help="first model year run from a jumped state")
     o.add_argument("--rundir", help="read --since from the active ocean jump log here")
@@ -693,9 +701,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="absolute target imbalance, W/m2 (overrides --n-fraction)")
     o.add_argument("--max-dt", type=float, default=10.0,
                    help="hard clip on the somtp increment, K (10)")
-    o.add_argument("--heat-ratio", type=float, default=1.0,
+    o.add_argument("--heat-ratio", type=float, default=None,
                    help="somtp increment / TS change, to cover the heat the "
-                        "atmosphere takes back (1; 'check' reports the implied value)")
+                        "atmosphere takes back (default: measured C_total/C_ocean, "
+                        "clipped to [1, 4]; 'check' reports the implied value)")
     o.add_argument("--max-extrapolation-ratio", type=float, default=5.0)
     o.add_argument("--probe", action="store_true",
                    help="probe mode: step TS ahead by the recent trend x "
