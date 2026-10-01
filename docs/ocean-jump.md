@@ -104,7 +104,11 @@ short to fit.
   `dTS = c1·(N_target − N_now)`; somtp increment `= dTS × heat_ratio`,
   clipped at `--max-dt` (10 K; hard bound 25 K per cell).
 - The somtp increment is `dTS × heat_ratio`, the ratio measured over the fit
-  window (Finding 1; `--heat-ratio` overrides). `check` reports the ratio the
+  window (Finding 1; `--heat-ratio` overrides; the window is reported as
+  `heat.window`). The reported "now" imbalance (`N_now`) is the mean of the
+  last `recent_years` (5) native years with its standard error (`N_now_se`);
+  the last single year is kept as `N_last_year` (on D2 it read -0.08 against a
+  noisy 5-yr mean of -0.75 ± 4). `check` reports the ratio the
   first post-jump year implies, which tests the measurement.
 - Uniform by default. `pattern` scales each cell by its warming rate between
   two archived docn.r (3×3 box-smoothed, weights clipped to [0, 3], area mean
@@ -132,7 +136,9 @@ simply unconstrained: over the last 10 yr D4's `energy_bot` changes by
 `advise-ocean --probe` therefore offers a jump that is *not* sized to an
 equilibrium: TS is stepped ahead by the run's own recent trend ×
 `--probe-years` (15) — a TS step; somtp moves by the measured heat ratio times
-that — i.e. forward Euler behind the settled time-domain
+that, the ratio measured over the longest of 40/30/20/10 yr with usable data
+(not the 15-yr trend window: on D2 the ratio reads 1.02 over 15 yr and 2.0
+over 40 yr, matching the TOA-surface gap / dTS/dt) — i.e. forward Euler behind the settled time-domain
 trustworthiness gate and the hard clip (or `--probe-dt` explicitly, which
 skips the gate — D2's ±2 K swings fail it). It reports the smallest λ the
 check will resolve after 5 settled years and the λ above which the probe

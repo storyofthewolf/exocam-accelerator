@@ -156,7 +156,7 @@ class OceanAdvisorConfig:
 class OceanAdvice:
     case: str
     model_year: int
-    N_now: float                  # native annual mean, last year
+    N_now: float                  # mean of the last recent_years native annual values
     N_now_fit: float              # Gregory line at TS_now
     N_target: float
     TS_now: float
@@ -183,6 +183,12 @@ class OceanAdvice:
     windows_tried: tuple = ()
     #: heat ratio: C_ocean, C_total (W yr m-2 K-1), ratio, used, measured
     heat: dict = field(default_factory=dict)
+    #: standard error of ``N_now`` (scatter of the averaged years / sqrt(n))
+    N_now_se: Optional[float] = None
+    #: the last single annual value (the old meaning of ``N_now``; noisy)
+    N_last_year: Optional[float] = None
+    #: years averaged in ``N_now``
+    N_now_years: int = 1
 
     @property
     def jump(self) -> bool:
@@ -210,6 +216,9 @@ class OceanAdvice:
             "case": self.case,
             "model_year": self.model_year,
             "N_now": num(self.N_now),
+            "N_now_se": num(self.N_now_se),
+            "N_now_years": self.N_now_years,
+            "N_last_year": num(self.N_last_year),
             "N_now_fit": num(self.N_now_fit),
             "N_target": num(self.N_target),
             "TS_now": num(self.TS_now),
@@ -355,7 +364,19 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
     t, N_nat = _annual(columns, config.imbalance, "native")
     years = model_years(t, start_year)
     model_year = int(years[-1])
-    N_now = float(N_nat[-1])
+    # "now" is the mean of the last recent_years native years (the same k the
+    # on-line gate uses): a single annual value swings by several W/m2 on a
+    # noisy run and reads as converged when the run is not.
+    N_last_year = float(N_nat[-1])
+    k_now = min(config.recent_years, int(np.isfinite(N_nat).sum()))
+    if k_now > 0:
+        N_tail = N_nat[-k_now:]
+        N_tail = N_tail[np.isfinite(N_tail)]
+        N_now = float(N_tail.mean())
+        N_now_se = (float(N_tail.std(ddof=1) / np.sqrt(N_tail.size))
+                    if N_tail.size > 1 else None)
+    else:
+        N_now, N_now_se = float("nan"), None
     reasons: List[str] = []
     warnings: List[str] = []
     windows: List[dict] = []
@@ -400,7 +421,7 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
                            config, which, float(window), since, tuple(detected), greg,
                            gap or {}, dTS, dT, raw, clipped, TS_after, N_after, C_eff,
                            tau, skipped, tuple(reasons), tuple(warnings), provenance,
-                           tuple(windows), heat or {})
+                           tuple(windows), heat or {}, N_now_se, N_last_year, k_now)
 
     if not have_T:
         reasons.append(f"no {SURFACE_VAR} series in the trend output")
@@ -547,6 +568,7 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
             tau = -c1 * C_eff
 
     heat = measure_heat_ratio(columns, w, config.heat_ratio, config.max_heat_ratio)
+    heat["window"] = float(window)
     hr = heat["used"]
     if config.heat_ratio is None and not heat["measured"]:
         warnings.append(f"heat ratio not measured ({heat['reason']}): somtp moves by "
@@ -629,9 +651,13 @@ class ProbeConfig:
     max_dT: float = 10.0
     #: the probe must exceed this many interannual TS sigmas (so it is visible)
     min_sigmas: float = 3.0
-    #: somtp increment / TS step; None = measured over the trend window
+    #: somtp increment / TS step; None = measured over the longest of
+    #: ``heat_windows`` with usable data (not the short trend window: C_total /
+    #: C_ocean is a slope of cumulative energy on TS, meaningless over 10-15
+    #: noisy years — atlasfu D2: 15 yr 1.02, 40 yr 2.01, TOA-surface gap says ~2)
     heat_ratio: Optional[float] = None
     max_heat_ratio: float = 4.0
+    heat_windows: Tuple[float, ...] = (40.0, 30.0, 20.0, 10.0)
     #: years averaged for the pre-probe point and in the lambda estimate
     recent_years: int = 5
     imbalance: str = "energy_bot"
@@ -702,14 +728,31 @@ def probe_ocean(columns: Dict[str, np.ndarray], case: str,
                             GateConfig())
         tr = np.polyfit(t[w], T[w], 1)
         sig_T = _scatter(T[w])
-        heat = measure_heat_ratio(columns, w, config.heat_ratio, config.max_heat_ratio)
+        # heat ratio: longest candidate window with usable data and enough TS range
+        n_usable = int(usable.sum())
+        cand = sorted({W for W in config.heat_windows if W <= n_usable}, reverse=True)
+        heat, hw = None, None
+        for W in cand:
+            hm = usable & (t > t[-1] - W)
+            h = measure_heat_ratio(columns, hm, config.heat_ratio, config.max_heat_ratio)
+            if heat is None:
+                heat, hw = h, W
+            if h["measured"] or config.heat_ratio is not None:
+                heat, hw = h, W
+                break
+        if heat is None:                     # too little data: the trend window
+            heat = measure_heat_ratio(columns, w, config.heat_ratio, config.max_heat_ratio)
+            hw = float(w.sum())
+        heat["window"] = float(hw)
         hr = heat["used"]
         out["heat"] = heat
         out["config"]["heat_ratio"] = hr
         Nr = N[w][-k:]
         sig_N = float(np.std(N[w] - np.polyval(np.polyfit(t[w], N[w], 1), t[w]), ddof=2))
         out.update(TS_now=float(T[-1]), trend_K_per_yr=float(tr[0]), sigma_TS=sig_T,
-                   N_now=float(Nr.mean()), sigma_N=sig_N)
+                   N_now=float(Nr.mean()), sigma_N=sig_N,
+                   N_now_se=float(Nr.std(ddof=1) / np.sqrt(Nr.size)) if Nr.size > 1 else None,
+                   N_last_year=float(N[-1]))
         # two-period lambda over the window (context: why a probe is needed)
         a, b = N[w][-2 * k:-k], N[w][-k:]
         dTp = float(T[w][-k:].mean() - T[w][-2 * k:-k].mean())

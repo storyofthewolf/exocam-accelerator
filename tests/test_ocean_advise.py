@@ -187,3 +187,40 @@ def test_probe_clip_explicit_and_refusals():
     flat = gregory_columns(years=150, noise=0.5)
     d = probe_ocean(flat, "s", ProbeConfig(probe_dT=0.3))
     assert d["somtp_dT"] is None and any("sigmas" in r for r in d["reasons"])
+
+
+def test_n_now_is_five_year_mean_with_se_not_last_year():
+    cols = truncate(gregory_columns(), 30)
+    cols["energy_bot_native"] = cols["energy_bot_native"].copy()
+    cols["energy_bot_native"][-12:] += 6.0           # last annual value spikes
+    a = advise_ocean(cols, "synth")
+    clean = advise_ocean(truncate(gregory_columns(), 30), "synth")
+    assert a.N_now_years == 5
+    assert a.N_last_year == pytest.approx(clean.N_last_year + 6.0, abs=0.05)
+    assert a.N_now == pytest.approx(clean.N_now + 6.0 / 5.0, abs=0.05)
+    assert a.N_now_se > clean.N_now_se
+    d = a.to_dict()
+    assert d["N_now"] == pytest.approx(a.N_now) and d["N_last_year"] == pytest.approx(a.N_last_year)
+    assert d["N_now_se"] == pytest.approx(a.N_now_se)
+
+
+def test_gregory_heat_window_reported():
+    a = advise_ocean(truncate(gregory_columns(c_atm=20.0), 30), "synth")
+    assert a.heat["window"] == pytest.approx(a.window_years)
+
+
+def test_probe_measures_heat_ratio_over_longest_window():
+    cols = truncate(gregory_columns(tau=40.0, noise=0.02, c_atm=20.0, years=100), 60)
+    d = probe_ocean(cols, "synth")
+    assert d["heat"]["window"] == 40.0                    # not the 15-yr trend window
+    d10 = probe_ocean(cols, "synth", ProbeConfig(heat_windows=(10.0,)))
+    assert d10["heat"]["window"] == 10.0
+    # too little data for any candidate window: the trend window
+    short = probe_ocean(truncate(gregory_columns(tau=40.0, noise=0.02, c_atm=20.0), 22),
+                        "synth")
+    assert short["heat"]["window"] <= 17.0
+    # an explicit ratio still wins
+    e = probe_ocean(cols, "synth", ProbeConfig(heat_ratio=1.5))
+    assert e["heat"]["used"] == 1.5
+    assert e["config"]["heat_ratio"] == 1.5
+    assert d["N_last_year"] is not None and "N_now_se" in d

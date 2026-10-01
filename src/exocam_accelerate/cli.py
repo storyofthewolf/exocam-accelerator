@@ -181,7 +181,7 @@ def _print_probe(d, json_path) -> int:
         print(f"TS now {d['TS_now']:.2f} K, trend {d['trend_K_per_yr']:+.3f} K/yr "
               f"(sigma {d['sigma_TS']:.2f} K)   {d['config']['imbalance']} "
               f"{d['N_now']:+.2f} W/m2 (last {d['config']['recent_years']} yr, "
-              f"sigma {d['sigma_N']:.2f})")
+              f"sigma {d['sigma_N']:.2f}; last year {d['N_last_year']:+.2f})")
     lr = d.get("lambda_recent")
     if lr:
         print(f"recent lambda (two {d['config']['recent_years']}-yr periods, "
@@ -197,7 +197,8 @@ def _print_probe(d, json_path) -> int:
         how = (f"{d['config']['probe_years']:g} yr of the recent trend"
                if d.get("sizing") == "trend" else "explicit --probe-dt")
         print(f"PROBE somtp increment: {d['somtp_dT']:+.3f} K ({how}; heat ratio "
-              f"{d['heat']['used']:.2f})")
+              f"{d['heat']['used']:.2f}, measured over the last "
+              f"{d['heat'].get('window', 0):g} yr)")
         print(f"  TS {d['TS_now']:.2f} -> {d['TS_after']:.2f} K ({d['dTS']:+.2f}); after "
               f"{d['config']['recent_years']} settled years 'check' resolves "
               f"lambda >= ~{d['lambda_detectable']:.2f} W/m2/K")
@@ -236,8 +237,10 @@ def cmd_advise_ocean(args) -> int:
     since_s = f"   post-jump since year {adv.since_year}" if adv.since_year else ""
     print(f"case {adv.case}   data through model year {adv.model_year}   fit "
           f"{adv.which_used}, last {adv.window_years:g} yr{since_s}")
-    print(f"TS now {adv.TS_now:.2f} K   {cfg.imbalance}: now {adv.N_now:+.2f} W/m2 "
-          f"(on the line {_fmt(adv.N_now_fit, 3)})   target {_fmt(adv.N_target, 3)}")
+    se_s = f" ± {adv.N_now_se:.2f}" if adv.N_now_se is not None else ""
+    print(f"TS now {adv.TS_now:.2f} K   {cfg.imbalance} now {adv.N_now:+.2f}{se_s} W/m2 "
+          f"(last {adv.N_now_years} yr mean; last year {adv.N_last_year:+.2f}; "
+          f"on the line {_fmt(adv.N_now_fit, 3)})   target {_fmt(adv.N_target, 3)}")
     g = adv.gregory
     if g is not None and "linear" in g.fits:
         c0, c1 = g.fits["linear"].params
@@ -250,7 +253,8 @@ def cmd_advise_ocean(args) -> int:
     h = d["heat"]
     if h.get("measured"):
         print(f"heat capacities: ocean {h['C_ocean']:.1f}, total {h['C_total']:.1f} "
-              f"W yr/m2/K -> heat ratio {h['ratio']:.2f} (used {h['used']:.2f})")
+              f"W yr/m2/K -> heat ratio {h['ratio']:.2f} (used {h['used']:.2f}"
+              f"; over the last {h['window']:g} yr)")
     if d["C_eff_m_seawater"] is not None:
         print(f"effective heat capacity {d['C_eff_W_yr_m2_K']:.2f} W yr/m2/K "
               f"(~{d['C_eff_m_seawater']:.0f} m of sea water)   relaxation time "
