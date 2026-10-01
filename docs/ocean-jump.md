@@ -197,8 +197,8 @@ than the advice's `since_year`.
 Readout states and the verdict rules (conservative; FAIL rules unchanged
 plus one):
 
-- FAIL: probe did not land; non-finite data; the energy imbalance rose in the
-  probe's direction (runaway; since superseded: energy_top, 3σ, see below); **new:** the TS drift *rose* after the probe by
+- FAIL: probe did not land; non-finite data; (originally also runaway — now a
+  warning, see below); **new:** the TS drift *rose* after the probe by
   ≥ 3σ (r_post > r_pre: TS accelerating away — runaway signature). The TS
   rule uses 3σ because a false alarm costs a rollback.
 - PASS: at least one readout is significant — energy_bot (≥ 2σ), or TS
@@ -240,10 +240,20 @@ probes (σ_N 7.6). Causes and fixes:
   pre-probe values, itself a very noisy estimate. It now uses the interannual
   scatter pooled from detrended residuals over the 20-yr pre-probe window
   (from `since_year`) and the settled post years;
-- runaway needs 3σ (`n_se_fail`), as for the TS rule; λ is readable at 2σ;
-- an energy runaway is downgraded to WAIT ("likely an energy false alarm")
-  when the TS readout is readable or falling back, i.e. the far quieter TS
-  drift shows the probe restoring.
+- runaway needs 3σ (`n_se_runaway`), as for the TS rule; λ is readable at 2σ;
+- (superseded the same day, see below) an energy runaway was downgraded to
+  WAIT when the TS readout showed the probe restoring.
+
+**Runaway is a warning, not a FAIL (user decision, 2026-10-01).** A probe that
+is pushed further away instead of pulled back — the energy_top imbalance grows
+in the probe's direction (≥ 3σ), or TS warms faster than before a warm probe
+(≥ 3σ) — is reported as `WARNING: runaway greenhouse suspected: <evidence>`
+(`CheckResult.warnings`, metric `runaway_suspected`). The check makes no
+judgement on rolling back: the verdict is WAIT (never PASS while the warning
+stands) and the decision is the user's. FAIL is kept for mechanical failures
+only (the probe never landed, non-finite data). Warning rates on synthetic
+D2-like probes: 0–0.2 % with no runaway in the data; a true TS runaway warns
+in 34 % of runs at 5 settled years and 98 % at 8.
 
 Synthetic D2-like probes (400 realisations, τ 25 yr): false FAIL 1.8–2.2 % →
 0.2–0.5 % (the remainder is the "did not land" rule); verdicts by settled

@@ -691,6 +691,8 @@ def cmd_check(args) -> int:
         print(f"  hi trend since jump {m['hi_trend_m_per_yr']:+.2f} m/yr")
     for r in res.reasons:
         print(f"  - {r}")
+    for w in getattr(res, "warnings", []):
+        print(f"WARNING: {w}")
     advice_line = {"PASS": "jump holds: resume normal segments",
                    "WAIT": "keep the short segments going and check again",
                    "FAIL": "roll back: exocam-accelerate rollback --rundir ... --archive ..."}

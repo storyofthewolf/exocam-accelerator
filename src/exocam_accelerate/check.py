@@ -74,6 +74,9 @@ class CheckResult:
     years_after: int              # post-jump years available
     settled_years: int
     metrics: Dict[str, float] = field(default_factory=dict)
+    #: flags reported alongside the verdict without deciding it (e.g.
+    #: "runaway greenhouse suspected"): what to do about them is the user's call
+    warnings: List[str] = field(default_factory=list)
 
 
 def _noise(x) -> float:
@@ -351,10 +354,10 @@ class ProbeCheckConfig:
     min_land_fraction: float = 0.3
     land_sigmas: float = 2.0
     #: significance of the imbalance change, in standard errors: n_se for a
-    #: readable lambda, n_se_fail for the runaway FAIL (stricter: the pre-probe
-    #: mean rests on only recent_years years, and a false alarm costs a rollback)
+    #: readable lambda, n_se_runaway for the runaway warning (stricter: the pre-probe
+    #: mean rests on only recent_years years)
     n_se: float = 2.0
-    n_se_fail: float = 3.0
+    n_se_runaway: float = 3.0
     #: the imbalance that decides the energy readout: energy_top, the planet's
     #: TOA balance (the quantity that defines convergence); energy_bot is
     #: read alongside for information only. Falls back to the advice's
@@ -370,9 +373,9 @@ class ProbeCheckConfig:
     #: window is short against tau)
     ts_post_max_years: int = 15
     #: significance for "TS rate changed" (readable) and for "TS rate rose after
-    #: a warm probe" (runaway FAIL; stricter, a false alarm costs a rollback)
+    #: a warm probe" (runaway warning; stricter: a false alarm is costly)
     ts_n_se: float = 2.0
-    ts_n_se_fail: float = 3.0
+    ts_n_se_runaway: float = 3.0
     #: cap on the lag-1 autocorrelation used to inflate standard errors
     ts_rho_max: float = 0.5
     #: heat capacity (W yr m-2 K-1) behind lambda = C/tau; None = take it from
@@ -482,7 +485,7 @@ def ts_relaxation_readout(years, T, jump_year: int, settle_years: int = 2,
            "ts_sigma": sigma, "ts_rho": rho, "ts_n_pre": float(a["n"]),
            "ts_n_post": float(b["n"]), "ts_D": D, "ts_D_se": se_D, "ts_D_sigmas": z}
 
-    if z < -config.ts_n_se_fail:
+    if z < -config.ts_n_se_runaway:
         out["ts_status"] = "runaway"
         return out
     falling = s * rq < -config.ts_n_se * se["rq"]    # TS reverses against the probe
@@ -558,11 +561,11 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
 
     Combination (conservative, explicit):
 
-    * FAIL — the probe never landed or the data are non-finite; the energy
-      readout shows runaway at ``n_se_fail`` (3) sigma and the TS drift does
-      not show the probe restoring (if it does, the energy signal is taken as
-      a false alarm: WAIT); or the TS drift *rose* after a warm probe by
-      ``ts_n_se_fail`` (3) sigma (TS accelerating upward: runaway signature);
+    * FAIL — the probe never landed or the data are non-finite;
+    * warning "runaway greenhouse suspected" (verdict WAIT, no recommendation
+      either way) — the energy readout grew in the probe's direction by
+      ``n_se_runaway`` (3) sigma, or the TS drift *rose* after a warm probe by
+      ``ts_n_se_runaway`` (3) sigma;
     * PASS — at least one readout is significant (the energy one at ``n_se``,
       the TS one at ``ts_n_se`` sigma, or TS reversing against the probe) and
       no FAIL rule fires and they do not contradict. Two readouts contradict
@@ -592,8 +595,10 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     reasons: List[str] = []
     metrics: Dict[str, float] = {"somtp_dT_applied": applied, "dTS_expected": expected}
 
+    warnings: List[str] = []
+
     def done(verdict):
-        return CheckResult(verdict, reasons, jump_year, n_post, n_set, metrics)
+        return CheckResult(verdict, reasons, jump_year, n_post, n_set, metrics, warnings)
 
     if n_post == 0:
         reasons.append(f"no complete model year since the probe at year {jump_year}")
@@ -644,7 +649,7 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
                            f"output is broken")
             return done(Verdict.FAIL)
         readouts[var] = _energy_readout(Nv, T, pre, settled, config.n_se,
-                                        config.n_se_fail, noise_pre)
+                                        config.n_se_runaway, noise_pre)
     er = readouts[primary]
     lam, lam_se, dN, se = er["lambda"], er["lambda_se"], er["dN"], er["se_dN"]
     metrics.update(N_pre=er["N_pre"], N_post=er["N_post"], dN=dN, se_dN=se,
@@ -679,22 +684,24 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
             metrics["ts_bracketed"] = 1.0 if ts["ts_side"] == "bracketed" else 0.0
         reasons.append(_ts_sentence(ts, C))
 
+    # A probe that is pushed further away instead of pulled back (the
+    # imbalance grows in the probe's direction, or TS warms faster than before
+    # a warm probe) has no restoring feedback at the new state. That is
+    # reported as a warning, not a verdict: whether to keep running or roll
+    # back is the user's decision.
     if n_state == "runaway":
-        if ts_state in ("readable", "falling_back"):
-            # A 2-sigma rise from only recent_years pre-probe years false-alarms
-            # a few % of the time on a noisy run; a FAIL means rolling back a
-            # good probe. When the far quieter TS drift clearly shows the probe
-            # restoring, hold the verdict instead.
-            reasons.append(f"{primary} says runaway but the TS drift shows the probe "
-                           f"restoring: likely an energy false alarm — keep running "
-                           f"and re-check")
-            return done(Verdict.WAIT)
-        return done(Verdict.FAIL)
+        warnings.append(f"runaway greenhouse suspected: {primary} rose by "
+                        f"{dN:+.2f} ± {se:.2f} W/m2 after a {er['dTS']:+.2f} K probe "
+                        f"(>= {config.n_se_runaway:g} sigma) — no restoring feedback seen")
     if ts_state == "runaway":
-        reasons.append(f"TS drift ROSE after the probe ({ts['ts_r_pre']:+.3f} -> "
-                       f"{ts['ts_r_post']:+.3f} K/yr, {-ts['ts_D_sigmas']:.1f} sigma): "
-                       f"TS is accelerating away — runaway signature, roll back")
-        return done(Verdict.FAIL)
+        warnings.append(f"runaway greenhouse suspected: TS drift rose after the probe "
+                        f"({ts['ts_r_pre']:+.3f} -> {ts['ts_r_post']:+.3f} K/yr, "
+                        f"{-ts['ts_D_sigmas']:.1f} sigma) — TS accelerating away")
+    if warnings:
+        metrics["runaway_suspected"] = 1.0
+        reasons.append("runaway greenhouse suspected (see warnings): no PASS while "
+                       "it stands; keep watching or roll back — your call")
+        return done(Verdict.WAIT)
     n_ok = n_state == "readable"
     ts_ok = ts_state in ("readable", "falling_back")
     ts_side = ts.get("ts_side") if ts else None
@@ -723,7 +730,7 @@ def _detrended_ssr(t, y):
     return float((r ** 2).sum()), y.size - 2
 
 
-def _energy_readout(N, T, pre, settled, n_se: float, n_se_fail: float,
+def _energy_readout(N, T, pre, settled, n_se: float, n_se_runaway: float,
                     noise_pre=None) -> dict:
     """Lever-arm readout of one imbalance series: settled post-probe years
     against the pre-probe years. state 'runaway' (the imbalance grew in the
@@ -749,7 +756,7 @@ def _energy_readout(N, T, pre, settled, n_se: float, n_se_fail: float,
            "lambda": -dN / dTS if dTS else float("nan"),
            "lambda_se": se / abs(dTS) if dTS else float("nan"),
            "state": "noise", "side": None}
-    if s * dN > n_se_fail * se:
+    if s * dN > n_se_runaway * se:
         out["state"] = "runaway"
     elif -s * dN > n_se * se:
         out["state"] = "readable"
@@ -762,8 +769,7 @@ def _energy_sentence(var: str, r: dict) -> str:
     lam = f"lambda {r['lambda']:.2f} ± {r['lambda_se']:.2f} W/m2/K"
     if r["state"] == "runaway":
         return (f"{var} rose by {r['dN']:+.2f} ± {r['se_dN']:.2f} W/m2 after a "
-                f"{r['dTS']:+.2f} K probe: no restoring feedback at this state "
-                f"(runaway-like)")
+                f"{r['dTS']:+.2f} K probe: no restoring feedback at this state")
     if r["state"] == "readable":
         if r["side"] == "above":
             side = "hotter still" if r["dTS"] > 0 else "cooler still"

@@ -72,8 +72,9 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   = recent TS trend × probe_years behind the time-domain gate, or explicit;
   `check_ocean_probe` measures λ from the lever arm on **energy_top** (user: the
   TOA balance is the most important quantity; energy_bot is information only)
-  plus a TS-trajectory readout (τ, TS_eq); FAILs if N grows at 3σ unless TS
-  shows the probe restoring. `som_ocean.py` (pure), `ocean_advise.py`,
+  plus a TS-trajectory readout (τ, TS_eq). No restoring response (N or the TS
+  rate grows after the probe, 3σ) is a WARNING "runaway greenhouse suspected"
+  with verdict WAIT — never an automatic FAIL; rolling back is the user's call. `som_ocean.py` (pure), `ocean_advise.py`,
   `restart.apply_ocean_jump`/`write_somtp_map`, `check.check_ocean_jump`,
   `cli advise-ocean|pattern|somtp-map`, viewer ocean layout + maps. See
   `docs/ocean-jump.md`.

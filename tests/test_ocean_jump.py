@@ -322,24 +322,20 @@ def test_probe_overshoot_is_bracketed():
     assert res.metrics["TS_eq"] == pytest.approx(350.0, abs=1.5)
 
 
-def test_probe_runaway_signature_fails():
-    # the imbalance rises after the warm probe and TS gives no readout to the
-    # contrary (pre-probe window too short for it): no restoring feedback
+def test_probe_runaway_is_a_warning_not_a_fail():
+    # the imbalance rises after the warm probe and TS gives no readout (pre-probe
+    # window too short for it): warn, hold the verdict, recommend nothing
     log = probe_log(5.0)
     log["advice"]["since_year"] = JUMP_YEAR - 4
     cols = gregory_columns(years=JUMP_YEAR - 1 + 8, tau=40.0, jump_year=JUMP_YEAR,
                            dT=5.0, noise=0.02, N_offset_after=12.0)
     res = check_any(cols, log)
-    assert res.verdict is Verdict.FAIL
-    assert any("runaway" in r for r in res.reasons)
-
-
-def test_probe_energy_runaway_downgraded_when_ts_restores():
-    # same energy signal, but the TS drift clearly shows the probe restoring:
-    # an energy false alarm must not trigger a rollback
+    assert res.verdict is Verdict.WAIT
+    assert any("runaway greenhouse suspected" in w for w in res.warnings)
+    assert res.metrics["runaway_suspected"] == 1.0
+    # even with TS restoring, the energy signal still raises the warning
     res, _ = probe_run(5.0, 8, N_offset_after=12.0)
-    assert res.verdict is Verdict.WAIT, res.reasons
-    assert any("false alarm" in r for r in res.reasons)
+    assert res.verdict is Verdict.WAIT and res.warnings
 
 
 def test_probe_waits_then_not_landed():

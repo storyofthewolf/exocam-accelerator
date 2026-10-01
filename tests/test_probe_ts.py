@@ -104,19 +104,18 @@ def test_falling_back_is_bracketed():
     assert res.metrics["ts_r_post"] < 0 and res.metrics["ts_bracketed"] == 1.0
 
 
-def test_accelerating_ts_is_runaway_fail():
+def test_accelerating_ts_warns_runaway():
     res = readout(10, runaway=True, seed=2)
-    assert res.verdict is Verdict.FAIL
-    assert any("accelerating" in r for r in res.reasons)
+    assert res.verdict is Verdict.WAIT
+    assert any("runaway greenhouse suspected" in w and "accelerating" in w
+               for w in res.warnings)
 
 
 def test_no_false_runaway_on_noise():
-    # (the energy_bot rule has its own, pre-existing false-alarm rate at sigma_N 7.6;
-    # count only the TS rule here)
-    fails = sum(any("accelerating" in r for r in
-                    readout(8, seed=s, tau=60.0, TS_eq=356.0).reasons)
-                for s in range(60))
-    assert fails <= 2
+    # no runaway in the data: the warning (energy_top or TS rule) stays rare
+    warned = sum(bool(readout(8, seed=s, tau=60.0, TS_eq=356.0).warnings)
+                 for s in range(60))
+    assert warned <= 2
 
 
 def test_unresolved_gives_bounds_then_passes_at_max_wait():
