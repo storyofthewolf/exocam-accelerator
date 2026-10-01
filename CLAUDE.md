@@ -70,7 +70,10 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   pattern (user asked for both). **Probe mode** (user decision: flattening N
   is not proof of runaway; a warm perturbation maps the trajectory): step
   = recent TS trend × probe_years behind the time-domain gate, or explicit;
-  `check_ocean_probe` measures λ from the lever arm, FAILs if N grows. `som_ocean.py` (pure), `ocean_advise.py`,
+  `check_ocean_probe` measures λ from the lever arm on **energy_top** (user: the
+  TOA balance is the most important quantity; energy_bot is information only)
+  plus a TS-trajectory readout (τ, TS_eq); FAILs if N grows at 3σ unless TS
+  shows the probe restoring. `som_ocean.py` (pure), `ocean_advise.py`,
   `restart.apply_ocean_jump`/`write_somtp_map`, `check.check_ocean_jump`,
   `cli advise-ocean|pattern|somtp-map`, viewer ocean layout + maps. See
   `docs/ocean-jump.md`.

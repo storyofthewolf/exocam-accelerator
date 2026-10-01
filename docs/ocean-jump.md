@@ -197,8 +197,8 @@ than the advice's `since_year`.
 Readout states and the verdict rules (conservative; FAIL rules unchanged
 plus one):
 
-- FAIL: probe did not land; non-finite data; energy_bot rose in the probe's
-  direction by ≥ 2σ (runaway); **new:** the TS drift *rose* after the probe by
+- FAIL: probe did not land; non-finite data; the energy imbalance rose in the
+  probe's direction (runaway; since superseded: energy_top, 3σ, see below); **new:** the TS drift *rose* after the probe by
   ≥ 3σ (r_post > r_pre: TS accelerating away — runaway signature). The TS
   rule uses 3σ because a false alarm costs a rollback.
 - PASS: at least one readout is significant — energy_bot (≥ 2σ), or TS
@@ -222,6 +222,33 @@ at 12–15; τ = 15 yr: 30 % at 5, 80 % at 8, 92 % at 10; τ = 40 yr: 11 % at 5,
 ρ = 0.3 slows this by 1–3 years. The energy_bot readout alone does not
 resolve these cases at all inside 12 years. The pulls of τ and TS_eq are
 centred (|median z| < 0.6) in `tests/test_probe_ts.py`.
+
+### energy_top decides; energy false alarms downgraded (2026-10-01, user decision)
+
+The user: the most important quantity is `energy_top`, the TOA balance — it is
+what defines convergence. The probe check's energy readout is therefore taken
+on `energy_top` (`ProbeCheckConfig.primary_imbalance`; falls back to the
+advice's imbalance when the trend output lacks it). `energy_bot` is read the
+same way and printed as "(information)" with `bot_*` metrics; it no longer
+decides a verdict. (Both vanish at equilibrium, so each gives a consistent
+TS_eq; their λ differ by the atmosphere's storage term while TS is drifting.)
+
+The energy runaway FAIL false-alarmed in ~2 % of synthetic no-runaway D2-like
+probes (σ_N 7.6). Causes and fixes:
+
+- the standard error came from the scatter of only `recent_years` (5)
+  pre-probe values, itself a very noisy estimate. It now uses the interannual
+  scatter pooled from detrended residuals over the 20-yr pre-probe window
+  (from `since_year`) and the settled post years;
+- runaway needs 3σ (`n_se_fail`), as for the TS rule; λ is readable at 2σ;
+- an energy runaway is downgraded to WAIT ("likely an energy false alarm")
+  when the TS readout is readable or falling back, i.e. the far quieter TS
+  drift shows the probe restoring.
+
+Synthetic D2-like probes (400 realisations, τ 25 yr): false FAIL 1.8–2.2 % →
+0.2–0.5 % (the remainder is the "did not land" rule); verdicts by settled
+years: PASS 18 % / 43 % / 57 % / 96 % at 5 / 8 / 10 / 13. A true TS runaway
+still FAILs in 34 % of runs at 5 settled years and 98 % at 8.
 
 ## Post-jump check (`check`, som_ocean logs)
 

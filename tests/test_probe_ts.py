@@ -137,9 +137,23 @@ def test_contradicting_readouts_wait():
     _, T = _annual(cols, "TS", "native")
     N = np.where(np.arange(T.size) >= JUMP - 1, -6.0, 6.0) + 0.1 * np.sin(np.arange(T.size))
     for w in ("native", "int1", "int2"):
-        cols[f"energy_bot_{w}"] = np.repeat(N, 12)
+        cols[f"energy_top_{w}"] = np.repeat(N, 12)       # energy_top decides
     res = check_ocean_probe(cols, d2_log())
     assert res.verdict is Verdict.WAIT and any("contradict" in r for r in res.reasons)
+
+
+def test_energy_bot_alone_does_not_decide():
+    # the same contradiction in energy_bot only is information, not a verdict
+    cols = d2_run(14, TS_eq=370.0, tau=30.0, seed=4)
+    from exocam_accelerate.advise import _annual
+    _, T = _annual(cols, "TS", "native")
+    N = np.where(np.arange(T.size) >= JUMP - 1, -6.0, 6.0) + 0.1 * np.sin(np.arange(T.size))
+    for w in ("native", "int1", "int2"):
+        cols[f"energy_bot_{w}"] = np.repeat(N, 12)
+    res = check_ocean_probe(cols, d2_log())
+    assert not any("contradict" in r for r in res.reasons)
+    assert any(r.startswith("(information) energy_bot") for r in res.reasons)
+    assert "bot_lambda" in res.metrics and res.metrics["primary_is_top"] == 1.0
 
 
 def test_short_pre_window_falls_back_to_energy_only():

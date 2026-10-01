@@ -31,7 +31,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from .advise import ICE_VOLUME_VAR, _annual, model_years
+from .advise import ICE_VOLUME_VAR, _annual, _have, model_years
 
 
 class Verdict(enum.Enum):
@@ -350,8 +350,16 @@ class ProbeCheckConfig:
     max_wait_years: int = 12
     min_land_fraction: float = 0.3
     land_sigmas: float = 2.0
-    #: significance of the energy_bot change, in standard errors
+    #: significance of the imbalance change, in standard errors: n_se for a
+    #: readable lambda, n_se_fail for the runaway FAIL (stricter: the pre-probe
+    #: mean rests on only recent_years years, and a false alarm costs a rollback)
     n_se: float = 2.0
+    n_se_fail: float = 3.0
+    #: the imbalance that decides the energy readout: energy_top, the planet's
+    #: TOA balance (the quantity that defines convergence); energy_bot is
+    #: read alongside for information only. Falls back to the advice's
+    #: imbalance when the trend output lacks it.
+    primary_imbalance: str = "energy_top"
     # ---- TS-trajectory readout (ts_relaxation_readout)
     #: pre-probe years the TS rate is fitted over (fewer than ts_pre_min_years
     #: usable -> no TS readout, the energy_bot readout stands alone)
@@ -530,8 +538,11 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
 
     Two independent readouts, each reported, then combined:
 
-    *Energy readout* (energy_bot): compares the settled post-probe years with
-    the ``recent_years`` before the probe (the probe's lever arm):
+    *Energy readout* (``primary_imbalance``, default energy_top — the TOA
+    balance that defines convergence; energy_bot is read the same way and
+    reported for information): compares the settled post-probe years with the
+    ``recent_years`` before the probe (the probe's lever arm), the standard
+    error from the interannual scatter of a long detrended pre-probe window:
 
     * lambda = -(N_post - N_pre) / (TS_post - TS_pre), with its standard error;
     * runaway — the imbalance *grew* in the direction of the probe (a warm probe
@@ -548,7 +559,9 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     Combination (conservative, explicit):
 
     * FAIL — the probe never landed or the data are non-finite; the energy
-      readout shows runaway; or the TS drift *rose* after a warm probe by
+      readout shows runaway at ``n_se_fail`` (3) sigma and the TS drift does
+      not show the probe restoring (if it does, the energy signal is taken as
+      a false alarm: WAIT); or the TS drift *rose* after a warm probe by
       ``ts_n_se_fail`` (3) sigma (TS accelerating upward: runaway signature);
     * PASS — at least one readout is significant (the energy one at ``n_se``,
       the TS one at ``ts_n_se`` sigma, or TS reversing against the probe) and
@@ -611,42 +624,46 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
                        f"so far")
         return done(Verdict.WAIT)
 
-    # ---- energy readout
-    Na, Nb = N[pre], N[settled]
-    dTS = float(T[settled].mean() - T[pre].mean())
-    dN = float(Nb.mean() - Na.mean())
-    se = float(np.sqrt(Na.var(ddof=1) / Na.size + Nb.var(ddof=1) / Nb.size))
-    s = 1.0 if dTS > 0 else -1.0
-    lam = -dN / dTS if dTS else float("nan")
-    lam_se = se / abs(dTS) if dTS else float("nan")
-    N_post, TS_post = float(Nb.mean()), float(T[settled].mean())
-    metrics.update(N_pre=float(Na.mean()), N_post=N_post, dN=dN, se_dN=se,
-                   TS_pre=float(T[pre].mean()), TS_post=TS_post, dTS=dTS,
+    # ---- energy readouts: energy_top decides, energy_bot is information
+    # interannual noise of the imbalance comes from detrended residuals over a
+    # long pre-probe window (and the settled post years), not from the scatter
+    # of the recent_years averaged: a 5-sample variance is itself so noisy that
+    # a 2-3 sigma rule on it false-alarms several times too often
+    noise_pre = (years < jump_year) & (years >= jump_year - config.ts_pre_years)
+    if advice.get("since_year") is not None:
+        noise_pre &= years >= int(advice["since_year"])
+    primary = (config.primary_imbalance
+               if _have(columns, config.primary_imbalance, "native") else imbalance)
+    readouts = {}
+    for var in dict.fromkeys((primary, "energy_bot", "energy_top")):
+        if not _have(columns, var, "native"):
+            continue
+        _, Nv = _annual(columns, var, "native")
+        if not np.all(np.isfinite(Nv[post | pre])):
+            reasons.append(f"non-finite {var} around the probe: the run or its trend "
+                           f"output is broken")
+            return done(Verdict.FAIL)
+        readouts[var] = _energy_readout(Nv, T, pre, settled, config.n_se,
+                                        config.n_se_fail, noise_pre)
+    er = readouts[primary]
+    lam, lam_se, dN, se = er["lambda"], er["lambda_se"], er["dN"], er["se_dN"]
+    metrics.update(N_pre=er["N_pre"], N_post=er["N_post"], dN=dN, se_dN=se,
+                   TS_pre=er["TS_pre"], TS_post=er["TS_post"], dTS=er["dTS"],
                    **{"lambda": lam, "lambda_se": lam_se})
-    n_state, n_side = "noise", None
-    if s * dN > config.n_se * se:
-        n_state = "runaway"
-        reasons.append(f"{imbalance} rose by {dN:+.2f} ± {se:.2f} W/m2 after a "
-                       f"{dTS:+.2f} K probe: no restoring feedback at this state "
-                       f"(runaway-like) — roll back")
-    elif -s * dN > config.n_se * se:
-        n_state = "readable"
-        TS_eq = TS_post + N_post / lam
-        metrics["TS_eq"] = TS_eq
-        if N_post * s > 0:
-            n_side = "above"
-            side = "hotter still" if s > 0 else "cooler still"
-            metrics["bracketed"] = 0.0
-            reasons.append(f"lambda {lam:.2f} ± {lam_se:.2f} W/m2/K; {imbalance} still "
-                           f"{N_post:+.2f}: the equilibrium is {side}, ~{TS_eq:.1f} K "
-                           f"— another probe or a Gregory jump can follow")
-        else:
-            n_side = "bracketed"
-            metrics["bracketed"] = 1.0
-            reasons.append(f"lambda {lam:.2f} ± {lam_se:.2f} W/m2/K; {imbalance} "
-                           f"{N_post:+.2f}: the probe overshot — the equilibrium "
-                           f"(~{TS_eq:.1f} K) lies between {metrics['TS_pre']:.1f} and "
-                           f"{TS_post:.1f} K")
+    metrics["primary_is_top"] = 1.0 if primary == "energy_top" else 0.0
+    s = 1.0 if er["dTS"] > 0 else -1.0
+    n_state, n_side = er["state"], er["side"]
+    if n_state == "readable":
+        metrics["TS_eq"] = er["TS_eq"]
+        metrics["bracketed"] = 1.0 if n_side == "bracketed" else 0.0
+    reasons.append(_energy_sentence(primary, er))
+    for var, r in readouts.items():
+        if var == primary:
+            continue
+        tag = "bot" if var == "energy_bot" else "top"
+        metrics.update({f"{tag}_lambda": r["lambda"], f"{tag}_lambda_se": r["lambda_se"],
+                        f"{tag}_dN": r["dN"], f"{tag}_N_post": r["N_post"]})
+        reasons.append(f"(information) {_energy_sentence(var, r)}")
 
     # ---- TS readout
     C = _heat_capacity(advice, config)
@@ -663,6 +680,15 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
         reasons.append(_ts_sentence(ts, C))
 
     if n_state == "runaway":
+        if ts_state in ("readable", "falling_back"):
+            # A 2-sigma rise from only recent_years pre-probe years false-alarms
+            # a few % of the time on a noisy run; a FAIL means rolling back a
+            # good probe. When the far quieter TS drift clearly shows the probe
+            # restoring, hold the verdict instead.
+            reasons.append(f"{primary} says runaway but the TS drift shows the probe "
+                           f"restoring: likely an energy false alarm — keep running "
+                           f"and re-check")
+            return done(Verdict.WAIT)
         return done(Verdict.FAIL)
     if ts_state == "runaway":
         reasons.append(f"TS drift ROSE after the probe ({ts['ts_r_pre']:+.3f} -> "
@@ -673,7 +699,7 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     ts_ok = ts_state in ("readable", "falling_back")
     ts_side = ts.get("ts_side") if ts else None
     if n_ok and ts_ok and ts_side and n_side != ts_side:
-        reasons.append(f"the readouts contradict: energy_bot puts the equilibrium "
+        reasons.append(f"the readouts contradict: {primary} puts the equilibrium "
                        f"'{n_side}', the TS drift '{ts_side}' — keep running")
         return done(Verdict.WAIT)
     if n_ok or ts_ok:
@@ -685,10 +711,69 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
             msg += f"; tau > {ts['ts_tau_lower']:.0f} yr (TS)"
         reasons.append(msg)
         return done(Verdict.PASS)
-    reasons.append(f"{imbalance} changed {dN:+.2f} ± {se:.2f} W/m2 so far: not yet "
+    reasons.append(f"{primary} changed {dN:+.2f} ± {se:.2f} W/m2 so far: not yet "
                    f"readable (lambda {lam:+.2f} ± {lam_se:.2f})")
     return done(Verdict.WAIT)
 
+
+def _detrended_ssr(t, y):
+    if y.size < 3:
+        return 0.0, 0
+    r = y - np.polyval(np.polyfit(t, y, 1), t)
+    return float((r ** 2).sum()), y.size - 2
+
+
+def _energy_readout(N, T, pre, settled, n_se: float, n_se_fail: float,
+                    noise_pre=None) -> dict:
+    """Lever-arm readout of one imbalance series: settled post-probe years
+    against the pre-probe years. state 'runaway' (the imbalance grew in the
+    probe's direction), 'readable' (lambda significantly > 0) or 'noise'.
+    The standard error uses the interannual scatter pooled from detrended
+    residuals over ``noise_pre`` (a longer pre-probe window) and the settled
+    years, when that window is longer than ``pre``."""
+    Na, Nb = N[pre], N[settled]
+    TS_pre, TS_post = float(T[pre].mean()), float(T[settled].mean())
+    dTS = TS_post - TS_pre
+    dN = float(Nb.mean() - Na.mean())
+    idx = np.arange(N.size, dtype=float)
+    if noise_pre is not None and noise_pre.sum() > pre.sum():
+        a, da = _detrended_ssr(idx[noise_pre], N[noise_pre])
+        b, db = _detrended_ssr(idx[settled], Nb)
+        sig = float(np.sqrt((a + b) / (da + db))) if da + db > 0 else float("nan")
+        se = sig * float(np.sqrt(1.0 / Na.size + 1.0 / Nb.size))
+    else:
+        se = float(np.sqrt(Na.var(ddof=1) / Na.size + Nb.var(ddof=1) / Nb.size))
+    s = 1.0 if dTS > 0 else -1.0
+    out = {"N_pre": float(Na.mean()), "N_post": float(Nb.mean()), "dN": dN, "se_dN": se,
+           "TS_pre": TS_pre, "TS_post": TS_post, "dTS": dTS,
+           "lambda": -dN / dTS if dTS else float("nan"),
+           "lambda_se": se / abs(dTS) if dTS else float("nan"),
+           "state": "noise", "side": None}
+    if s * dN > n_se_fail * se:
+        out["state"] = "runaway"
+    elif -s * dN > n_se * se:
+        out["state"] = "readable"
+        out["TS_eq"] = TS_post + out["N_post"] / out["lambda"]
+        out["side"] = "above" if out["N_post"] * s > 0 else "bracketed"
+    return out
+
+
+def _energy_sentence(var: str, r: dict) -> str:
+    lam = f"lambda {r['lambda']:.2f} ± {r['lambda_se']:.2f} W/m2/K"
+    if r["state"] == "runaway":
+        return (f"{var} rose by {r['dN']:+.2f} ± {r['se_dN']:.2f} W/m2 after a "
+                f"{r['dTS']:+.2f} K probe: no restoring feedback at this state "
+                f"(runaway-like)")
+    if r["state"] == "readable":
+        if r["side"] == "above":
+            side = "hotter still" if r["dTS"] > 0 else "cooler still"
+            return (f"{var}: {lam}, still {r['N_post']:+.2f} W/m2: the equilibrium is "
+                    f"{side}, ~{r['TS_eq']:.1f} K — another probe or a Gregory jump "
+                    f"can follow")
+        return (f"{var}: {lam}, now {r['N_post']:+.2f} W/m2: the probe overshot — the "
+                f"equilibrium (~{r['TS_eq']:.1f} K) lies between {r['TS_pre']:.1f} and "
+                f"{r['TS_post']:.1f} K")
+    return f"{var} changed {r['dN']:+.2f} ± {r['se_dN']:.2f} W/m2 ({lam}): within the noise"
 
 def _ts_sentence(ts: dict, C: Optional[float]) -> str:
     base = (f"TS drift {ts['ts_r_pre']:+.3f} ± {ts['ts_r_pre_se']:.3f} K/yr before, "
