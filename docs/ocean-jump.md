@@ -156,6 +156,73 @@ overshot = bracketed); WAIT while the response is inside the noise (PASS with
 an upper bound on |λ| after 12 settled years). The viewer's probe toggle draws
 the outcome fan: where the post-probe state lands for each λ.
 
+### TS-trajectory readout of the probe check (2026-10-01)
+
+On a noisy run energy_bot is a poor gauge: D2 (353 K) has an annual σ of
+7.6 W/m², so after 5 settled years the lever-arm λ resolves only
+λ ≳ 2.3 W/m²/K while D2's λ is probably < 1. Annual TS scatters by only
+~1 K, and its drift (0.16 ± 0.04 K/yr before the probe) is measurable on both
+sides of the probe. `check_ocean_probe` therefore also reads the probe from
+TS (`check.ts_relaxation_readout`), as *additional* metrics (`ts_*`); the
+energy_bot readout is unchanged.
+
+One-box relaxation, `dTS/dt = (TS_eq − TS)/τ`: two (rate, temperature)
+points on one line,
+
+    r_pre  at T_pre   (OLS over the last 20 pre-probe years; at least 8)
+    r_post at T_post  (OLS over the settled post-probe years, last 15 at most)
+    τ = (T_post − T_pre)/(r_pre − r_post),   TS_eq = T_pre + r_pre τ,
+    λ = C/τ  (C = advice `C_eff_W_yr_m2_K`, else `heat.C_ocean`; the
+              ProbeCheckConfig.heat_capacity overrides)
+
+Method choice: a straight-line fit over a window short against τ gives the
+derivative and the temperature at the window's mid-time (bias ~(L/τ)²/24,
+1.5 % for L = 10 yr, τ = 25 yr), so the post-probe transient is handled
+without assuming its shape, and (T, r) pairs have Gaussian errors that
+propagate by the delta method. A joint exponential fit (TS_eq, τ, landed step)
+to a nearly straight 20-yr pre window is badly conditioned and its errors are
+not Gaussian; it uses the same information (the change in rate across a known
+change in temperature).
+
+Errors: slope se = σ_eff/√Sxx, mean se = σ_eff/√n, with σ the pooled residual
+scatter of the two fits (post-window curvature only inflates it) and
+σ_eff = σ √((1+ρ)/(1−ρ)), ρ the lag-1 autocorrelation of the pre-probe
+residuals clipped to [0, 0.5] (a 20-yr ρ is itself noisy; the cap stops one
+lucky run inflating the error without bound). τ and TS_eq errors are first
+order (delta method) and are reported only once the rate change is resolved
+(≥ 2σ); until then only a lower bound on τ (and the matching upper bound on
+λ). The uncertainty of C is not propagated. The pre window starts no earlier
+than the advice's `since_year`.
+
+Readout states and the verdict rules (conservative; FAIL rules unchanged
+plus one):
+
+- FAIL: probe did not land; non-finite data; energy_bot rose in the probe's
+  direction by ≥ 2σ (runaway); **new:** the TS drift *rose* after the probe by
+  ≥ 3σ (r_post > r_pre: TS accelerating away — runaway signature). The TS
+  rule uses 3σ because a false alarm costs a rollback.
+- PASS: at least one readout is significant — energy_bot (≥ 2σ), or TS
+  (rate change ≥ 2σ, which yields τ, TS_eq ± se, λ and the side; or TS
+  falling back against the probe, r_post < 0 at ≥ 2σ: equilibrium below the
+  probe level, bracketed; r_post still ≥ 0 with a resolved rate change:
+  equilibrium above) — and no FAIL rule fires and the two do not
+  contradict.
+- Contradiction: both readable, putting the equilibrium on different sides of
+  the probe level (energy "hotter still" vs TS "bracketed", or the reverse):
+  WAIT, with the reason printed. Keep running.
+- WAIT: fewer than 5 settled years, neither significant, or a contradiction.
+  After 12 settled years with neither readable: PASS with bounds
+  (|λ| below what energy resolves, τ above the TS lower bound).
+
+Resolution (synthetic D2-like probe: +4 K from 352.7 K, TS_eq 358 K, τ 25 yr,
+C = 7, annual σ_TS 1.0–1.2 K, σ_N 7.6 W/m²; 100 noise realisations, readable
+fraction by settled years): τ = 25 yr: 16 % at 5, 42 % at 8, 60 % at 10, ~80–95 %
+at 12–15; τ = 15 yr: 30 % at 5, 80 % at 8, 92 % at 10; τ = 40 yr: 11 % at 5,
+31 % at 10, ~60 % at 15 (rest report a τ lower bound). AR(1) noise with
+ρ = 0.3 slows this by 1–3 years. The energy_bot readout alone does not
+resolve these cases at all inside 12 years. The pulls of τ and TS_eq are
+centred (|median z| < 0.6) in `tests/test_probe_ts.py`.
+
 ## Post-jump check (`check`, som_ocean logs)
 
 - landed: first post-jump annual TS moved by the expected

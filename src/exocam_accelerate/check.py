@@ -352,11 +352,175 @@ class ProbeCheckConfig:
     land_sigmas: float = 2.0
     #: significance of the energy_bot change, in standard errors
     n_se: float = 2.0
+    # ---- TS-trajectory readout (ts_relaxation_readout)
+    #: pre-probe years the TS rate is fitted over (fewer than ts_pre_min_years
+    #: usable -> no TS readout, the energy_bot readout stands alone)
+    ts_pre_years: int = 20
+    ts_pre_min_years: int = 8
+    #: most recent settled post-probe years the post rate is fitted over (a
+    #: straight line is only a good local fit of the relaxation while the
+    #: window is short against tau)
+    ts_post_max_years: int = 15
+    #: significance for "TS rate changed" (readable) and for "TS rate rose after
+    #: a warm probe" (runaway FAIL; stricter, a false alarm costs a rollback)
+    ts_n_se: float = 2.0
+    ts_n_se_fail: float = 3.0
+    #: cap on the lag-1 autocorrelation used to inflate standard errors
+    ts_rho_max: float = 0.5
+    #: heat capacity (W yr m-2 K-1) behind lambda = C/tau; None = take it from
+    #: the advice (C_eff_W_yr_m2_K, else heat.C_ocean)
+    heat_capacity: Optional[float] = None
 
     def __post_init__(self) -> None:
-        for name in ("settle_years", "min_years", "max_wait_years"):
+        for name in ("settle_years", "min_years", "max_wait_years", "ts_pre_years",
+                     "ts_pre_min_years", "ts_post_max_years"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+
+
+def _line(x: np.ndarray, y: np.ndarray) -> dict:
+    """OLS line with the centred-x quantities the readout needs."""
+    xm, ym = float(x.mean()), float(y.mean())
+    sxx = float(((x - xm) ** 2).sum())
+    slope = float(((x - xm) * (y - ym)).sum() / sxx)
+    res = y - ym - slope * (x - xm)
+    return {"n": int(x.size), "xm": xm, "ym": ym, "sxx": sxx, "slope": slope,
+            "res": res, "ssr": float((res ** 2).sum())}
+
+
+def _tau_eq(Tp: float, Tq: float, rp: float, rq: float):
+    """One-box relaxation from two (T, dT/dt) points: tau and the equilibrium."""
+    D = rp - rq
+    tau = (Tq - Tp) / D
+    return tau, Tp + rp * tau
+
+
+def ts_relaxation_readout(years, T, jump_year: int, settle_years: int = 2,
+                          config: ProbeCheckConfig = ProbeCheckConfig(),
+                          probe_sign: float = 1.0, since_year: Optional[int] = None,
+                          heat_capacity: Optional[float] = None) -> Optional[dict]:
+    """Read a probe from the surface-temperature trajectory (annual TS).
+
+    energy_bot is a noisy gauge on a hot slab aquaplanet (annual sigma ~8 W/m2
+    on D2, so five settled years resolve only lambda >~ 2 W/m2/K) while annual
+    TS scatters by ~1 K, and its drift is measurable both before and after the
+    probe. The one-box relaxation ``dTS/dt = (TS_eq - TS)/tau`` gives two
+    (rate, temperature) points on the same line:
+
+        r_pre  at T_pre   (OLS over the last ``ts_pre_years`` pre-probe years)
+        r_post at T_post  (OLS over the settled post-probe years, at most
+                           ``ts_post_max_years``)
+        tau    = (T_post - T_pre) / (r_pre - r_post)
+        TS_eq  = T_pre + r_pre * tau
+
+    Why two local slopes rather than a joint exponential fit of the whole
+    series: the post-probe series is a transient, but over a window short
+    against tau the OLS slope is the derivative at the window's mid-time and
+    the window mean is the temperature there (error ~ (L/tau)^2/24 of the
+    rate, ~1.5 % for L=10 yr, tau=25 yr), so each (T, r) pair is unbiased.
+    The estimators are then (T, r) pairs with Gaussian errors, which
+    propagate through the two equations by the delta method; a joint
+    nonlinear fit of (TS_eq, tau, landed step) from a 20-yr pre window that
+    is nearly straight is badly conditioned and its errors are not Gaussian.
+    The information used is the same: the *change* in rate across a known
+    change in temperature.
+
+    Uncertainties. Slope standard errors use the pooled residual scatter of
+    both fits (the post residuals carry a little curvature, which only
+    inflates them, conservatively) and are inflated by (1+rho)/(1-rho)
+    for the lag-1 autocorrelation rho of the *pre-probe* residuals (more
+    degrees of freedom; clipped to [0, ``ts_rho_max``]: a 20-yr estimate of rho
+    is itself noisy, and the cap keeps one lucky run of years from inflating
+    the error without bound). Means: sigma_eff/sqrt(n). The four inputs are
+    independent (centred OLS gives uncorrelated mean and slope). tau and
+    TS_eq errors are first order and trustworthy only when the rate change is
+    well resolved; below ``ts_n_se`` sigma they are not reported, only a
+    lower bound on tau. The uncertainty of the heat capacity is not included.
+
+    Returns None when the pre-probe window is too short, else a dict with the
+    ``ts_`` metrics (status 'runaway', 'readable', 'falling_back' or
+    'unresolved'; 'side' 'bracketed' / 'above' where known).
+    """
+    years = np.asarray(years)
+    T = np.asarray(T, dtype=float)
+    pre = (years < jump_year) & (years >= jump_year - config.ts_pre_years)
+    if since_year is not None:
+        pre &= years >= since_year
+    post = years >= jump_year + settle_years
+    post_idx = np.flatnonzero(post)[-config.ts_post_max_years:]
+    post = np.zeros(years.size, dtype=bool)
+    post[post_idx] = True
+    if pre.sum() < config.ts_pre_min_years or post.sum() < 3:
+        return None
+    if not (np.all(np.isfinite(T[pre])) and np.all(np.isfinite(T[post]))):
+        return None
+    a = _line(years[pre].astype(float), T[pre])
+    b = _line(years[post].astype(float), T[post])
+    dof = (a["n"] - 2) + (b["n"] - 2)
+    sigma = float(np.sqrt((a["ssr"] + b["ssr"]) / dof))
+    e = a["res"]
+    rho = float((e[:-1] * e[1:]).sum() / (e ** 2).sum()) if e.size > 2 else 0.0
+    rho = min(max(rho, 0.0), config.ts_rho_max)
+    s_eff = sigma * np.sqrt((1.0 + rho) / (1.0 - rho))
+    se = {"Tp": s_eff / np.sqrt(a["n"]), "Tq": s_eff / np.sqrt(b["n"]),
+          "rp": s_eff / np.sqrt(a["sxx"]), "rq": s_eff / np.sqrt(b["sxx"])}
+    Tp, Tq, rp, rq = a["ym"], b["ym"], a["slope"], b["slope"]
+    s = 1.0 if probe_sign >= 0 else -1.0
+    D = rp - rq
+    se_D = float(np.hypot(se["rp"], se["rq"]))
+    z = s * D / se_D                                  # >0: the probe slowed the drift
+    out = {"ts_r_pre": rp, "ts_r_pre_se": se["rp"], "ts_r_post": rq,
+           "ts_r_post_se": se["rq"], "ts_T_pre_fit": Tp, "ts_T_post_fit": Tq,
+           "ts_sigma": sigma, "ts_rho": rho, "ts_n_pre": float(a["n"]),
+           "ts_n_post": float(b["n"]), "ts_D": D, "ts_D_se": se_D, "ts_D_sigmas": z}
+
+    if z < -config.ts_n_se_fail:
+        out["ts_status"] = "runaway"
+        return out
+    falling = s * rq < -config.ts_n_se * se["rq"]    # TS reverses against the probe
+    if falling:
+        out["ts_side"] = "bracketed"
+    if z >= config.ts_n_se and s * (Tq - Tp) > 0:
+        tau, Teq = _tau_eq(Tp, Tq, rp, rq)
+        # first-order (delta-method) errors from numerical gradients
+        base = np.array([Tp, Tq, rp, rq])
+        keys = ("Tp", "Tq", "rp", "rq")
+        var_tau = var_eq = 0.0
+        for i, k in enumerate(keys):
+            h = 1e-6 * max(1.0, abs(base[i]))
+            up, dn = base.copy(), base.copy()
+            up[i] += h
+            dn[i] -= h
+            tu, eu = _tau_eq(*up)
+            td, ed = _tau_eq(*dn)
+            var_tau += ((tu - td) / (2 * h) * se[k]) ** 2
+            var_eq += ((eu - ed) / (2 * h) * se[k]) ** 2
+        out.update(ts_status="readable", ts_tau=tau, ts_tau_se=float(np.sqrt(var_tau)),
+                   ts_eq=Teq, ts_eq_se=float(np.sqrt(var_eq)),
+                   ts_side="above" if s * (Teq - Tq) > 0 else "bracketed")
+        if heat_capacity:
+            out["ts_lambda"] = heat_capacity / tau
+            out["ts_lambda_se"] = heat_capacity / tau ** 2 * out["ts_tau_se"]
+        return out
+    if falling:
+        out["ts_status"] = "falling_back"
+        return out
+    out["ts_status"] = "unresolved"
+    denom = s * D + config.ts_n_se * se_D          # rate change at its upper edge
+    if denom > 0 and s * (Tq - Tp) > 0:
+        out["ts_tau_lower"] = float(abs(Tq - Tp) / denom)
+        if heat_capacity:
+            out["ts_lambda_upper"] = heat_capacity / out["ts_tau_lower"]
+    return out
+
+
+def _heat_capacity(advice: dict, config: ProbeCheckConfig) -> Optional[float]:
+    if config.heat_capacity:
+        return float(config.heat_capacity)
+    for v in (advice.get("C_eff_W_yr_m2_K"), (advice.get("heat") or {}).get("C_ocean")):
+        if v is not None and np.isfinite(v) and v > 0:
+            return float(v)
+    return None
 
 
 def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
@@ -364,20 +528,37 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
                       config: ProbeCheckConfig = ProbeCheckConfig()) -> CheckResult:
     """Read a probe's response: lambda, the implied equilibrium, and the side.
 
-    Compares the settled post-probe years with the ``recent_years`` before
-    the probe (the probe's lever arm):
+    Two independent readouts, each reported, then combined:
+
+    *Energy readout* (energy_bot): compares the settled post-probe years with
+    the ``recent_years`` before the probe (the probe's lever arm):
 
     * lambda = -(N_post - N_pre) / (TS_post - TS_pre), with its standard error;
-    * FAIL — the imbalance *grew* in the direction of the probe (a warm probe
-      that increases energy_bot): no restoring feedback at the new state, the
-      runaway signature; also a probe that never landed, or non-finite data;
-    * PASS — lambda significantly > 0: ``TS_eq = TS_post + N_post/lambda`` and
-      ``side`` (N_post > 0 after a warm probe: the equilibrium is hotter still;
-      < 0: the probe overshot and the equilibrium is bracketed between the
-      pre- and post-probe states);
-    * WAIT — fewer than ``min_years`` settled years, or a response still inside
-      the noise (until ``max_wait_years``, then PASS with lambda below what the
-      probe resolves).
+    * runaway — the imbalance *grew* in the direction of the probe (a warm probe
+      that increases energy_bot): no restoring feedback at the new state;
+    * readable — lambda significantly > 0: ``TS_eq = TS_post + N_post/lambda``
+      and ``side`` (N_post > 0 after a warm probe: the equilibrium is hotter
+      still; < 0: the probe overshot and the equilibrium is bracketed between
+      the pre- and post-probe states).
+
+    *TS readout* (``ts_relaxation_readout``): the surface-temperature drift
+    before vs after the probe -> tau, TS_eq, side, and lambda = C/tau when the
+    advice carries a heat capacity. Far quieter than energy_bot on noisy runs.
+
+    Combination (conservative, explicit):
+
+    * FAIL — the probe never landed or the data are non-finite; the energy
+      readout shows runaway; or the TS drift *rose* after a warm probe by
+      ``ts_n_se_fail`` (3) sigma (TS accelerating upward: runaway signature);
+    * PASS — at least one readout is significant (the energy one at ``n_se``,
+      the TS one at ``ts_n_se`` sigma, or TS reversing against the probe) and
+      no FAIL rule fires and they do not contradict. Two readouts contradict
+      when both are readable and put the equilibrium on different sides of
+      the probe level (hotter still vs bracketed): the verdict is then WAIT;
+    * WAIT — fewer than ``min_years`` settled years, neither readout
+      significant, or a contradiction. After ``max_wait_years`` settled years
+      with neither readable: PASS, with upper bounds on |lambda| / a lower
+      bound on tau (the response is below what the probe resolves).
     """
     advice = jump_log.get("advice") or {}
     cfg = advice.get("config") or {}
@@ -430,6 +611,7 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
                        f"so far")
         return done(Verdict.WAIT)
 
+    # ---- energy readout
     Na, Nb = N[pre], N[settled]
     dTS = float(T[settled].mean() - T[pre].mean())
     dN = float(Nb.mean() - Na.mean())
@@ -441,35 +623,90 @@ def check_ocean_probe(columns: Dict[str, np.ndarray], jump_log: dict,
     metrics.update(N_pre=float(Na.mean()), N_post=N_post, dN=dN, se_dN=se,
                    TS_pre=float(T[pre].mean()), TS_post=TS_post, dTS=dTS,
                    **{"lambda": lam, "lambda_se": lam_se})
-
+    n_state, n_side = "noise", None
     if s * dN > config.n_se * se:
+        n_state = "runaway"
         reasons.append(f"{imbalance} rose by {dN:+.2f} ± {se:.2f} W/m2 after a "
                        f"{dTS:+.2f} K probe: no restoring feedback at this state "
                        f"(runaway-like) — roll back")
-        return done(Verdict.FAIL)
-    if -s * dN > config.n_se * se:
+    elif -s * dN > config.n_se * se:
+        n_state = "readable"
         TS_eq = TS_post + N_post / lam
         metrics["TS_eq"] = TS_eq
         if N_post * s > 0:
+            n_side = "above"
             side = "hotter still" if s > 0 else "cooler still"
             metrics["bracketed"] = 0.0
             reasons.append(f"lambda {lam:.2f} ± {lam_se:.2f} W/m2/K; {imbalance} still "
                            f"{N_post:+.2f}: the equilibrium is {side}, ~{TS_eq:.1f} K "
                            f"— another probe or a Gregory jump can follow")
         else:
+            n_side = "bracketed"
             metrics["bracketed"] = 1.0
             reasons.append(f"lambda {lam:.2f} ± {lam_se:.2f} W/m2/K; {imbalance} "
                            f"{N_post:+.2f}: the probe overshot — the equilibrium "
                            f"(~{TS_eq:.1f} K) lies between {metrics['TS_pre']:.1f} and "
                            f"{TS_post:.1f} K")
+
+    # ---- TS readout
+    C = _heat_capacity(advice, config)
+    if C:
+        metrics["heat_capacity"] = C
+    ts = ts_relaxation_readout(years, T, jump_year, config.settle_years, config,
+                               probe_sign=s, since_year=advice.get("since_year"),
+                               heat_capacity=C)
+    ts_state = ts["ts_status"] if ts else "none"
+    if ts:
+        metrics.update({k_: v for k_, v in ts.items() if isinstance(v, float)})
+        if "ts_side" in ts:
+            metrics["ts_bracketed"] = 1.0 if ts["ts_side"] == "bracketed" else 0.0
+        reasons.append(_ts_sentence(ts, C))
+
+    if n_state == "runaway":
+        return done(Verdict.FAIL)
+    if ts_state == "runaway":
+        reasons.append(f"TS drift ROSE after the probe ({ts['ts_r_pre']:+.3f} -> "
+                       f"{ts['ts_r_post']:+.3f} K/yr, {-ts['ts_D_sigmas']:.1f} sigma): "
+                       f"TS is accelerating away — runaway signature, roll back")
+        return done(Verdict.FAIL)
+    n_ok = n_state == "readable"
+    ts_ok = ts_state in ("readable", "falling_back")
+    ts_side = ts.get("ts_side") if ts else None
+    if n_ok and ts_ok and ts_side and n_side != ts_side:
+        reasons.append(f"the readouts contradict: energy_bot puts the equilibrium "
+                       f"'{n_side}', the TS drift '{ts_side}' — keep running")
+        return done(Verdict.WAIT)
+    if n_ok or ts_ok:
         return done(Verdict.PASS)
     if n_set >= config.max_wait_years:
-        reasons.append(f"response within the noise after {n_set} settled years: "
-                       f"|lambda| < ~{config.n_se * lam_se:.2f} W/m2/K at this state")
+        msg = (f"response within the noise after {n_set} settled years: "
+               f"|lambda| < ~{config.n_se * lam_se:.2f} W/m2/K at this state (energy)")
+        if ts and "ts_tau_lower" in ts:
+            msg += f"; tau > {ts['ts_tau_lower']:.0f} yr (TS)"
+        reasons.append(msg)
         return done(Verdict.PASS)
     reasons.append(f"{imbalance} changed {dN:+.2f} ± {se:.2f} W/m2 so far: not yet "
                    f"readable (lambda {lam:+.2f} ± {lam_se:.2f})")
     return done(Verdict.WAIT)
+
+
+def _ts_sentence(ts: dict, C: Optional[float]) -> str:
+    base = (f"TS drift {ts['ts_r_pre']:+.3f} ± {ts['ts_r_pre_se']:.3f} K/yr before, "
+            f"{ts['ts_r_post']:+.3f} ± {ts['ts_r_post_se']:.3f} after")
+    st = ts["ts_status"]
+    if st == "readable":
+        lam = (f", lambda {ts['ts_lambda']:.2f} ± {ts['ts_lambda_se']:.2f} W/m2/K"
+               if "ts_lambda" in ts else "")
+        where = ("equilibrium above the probe level" if ts["ts_side"] == "above"
+                 else "TS falls back: equilibrium below the probe level (bracketed)")
+        return (f"{base}: tau {ts['ts_tau']:.0f} ± {ts['ts_tau_se']:.0f} yr, TS_eq "
+                f"{ts['ts_eq']:.1f} ± {ts['ts_eq_se']:.1f} K{lam}; {where}")
+    if st == "falling_back":
+        return f"{base}: TS is falling back — equilibrium below the probe level (bracketed)"
+    if st == "runaway":
+        return base
+    extra = (f"; tau > {ts['ts_tau_lower']:.0f} yr" if "ts_tau_lower" in ts else "")
+    return f"{base}: change not yet resolved ({ts['ts_D_sigmas']:+.1f} sigma){extra}"
 
 
 def check_any(columns, jump_log: dict, start_year: int = 1,

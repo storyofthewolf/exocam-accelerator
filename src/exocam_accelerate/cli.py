@@ -656,6 +656,20 @@ def cmd_check(args) -> int:
               f"{m['N_pre']:+.2f} -> {m['N_post']:+.2f} W/m2 (± {m['se_dN']:.2f}); "
               f"lambda {m['lambda']:+.2f} ± {m['lambda_se']:.2f} W/m2/K"
               + (f"; TS_eq ~{m['TS_eq']:.1f} K" if "TS_eq" in m else ""))
+    if "ts_r_pre" in m:
+        line = (f"  TS drift: {m['ts_r_pre']:+.3f} ± {m['ts_r_pre_se']:.3f} K/yr "
+                f"before (n={m['ts_n_pre']:.0f}) -> {m['ts_r_post']:+.3f} ± "
+                f"{m['ts_r_post_se']:.3f} after (n={m['ts_n_post']:.0f}); rate "
+                f"change {m['ts_D_sigmas']:+.1f} sigma")
+        if "ts_tau" in m:
+            line += (f"; tau {m['ts_tau']:.0f} ± {m['ts_tau_se']:.0f} yr, TS_eq "
+                     f"{m['ts_eq']:.1f} ± {m['ts_eq_se']:.1f} K")
+            if "ts_lambda" in m:
+                line += (f", lambda {m['ts_lambda']:.2f} ± {m['ts_lambda_se']:.2f} "
+                         f"W/m2/K (C {m['heat_capacity']:.1f})")
+        elif "ts_tau_lower" in m:
+            line += f"; tau > {m['ts_tau_lower']:.0f} yr"
+        print(line)
     if "N_line" in m:
         print(f"  N: observed {m['N_obs']:+.2f}, Gregory line {m['N_line']:+.2f} "
               f"(diff {m['dN']:+.2f}, tolerance {m['tol_N']:.2f}) W/m2; TS "
