@@ -23,9 +23,9 @@ view      local interactive viewer (http://127.0.0.1:8765) of the trend files an
 Hot, ice-free regime — som_ocean plugin, docn.r somtp:
 advise-ocean  fit TS against the surface imbalance energy_bot (the slab ocean's
               own equilibrium; energy_top also carries the heat the atmosphere
-              stores while it warms), print the recommended somtp increment,
-              scaled by the measured heat ratio C_total/C_ocean
-              print the recommended somtp increment (--json saves it).
+              stores while it warms), print the recommended somtp increment:
+              the TS step divided by the measured ocean heat fraction
+              C_ocean/C_total (--json saves it).
 pattern       optional: shape the increment by the local warming rate between
               two archived docn.r restarts (area mean unchanged).
 somtp-map     write docn.r somtp as a lat-lon netCDF (ncview / Panoply / view).
@@ -196,9 +196,11 @@ def _print_probe(d, json_path) -> int:
     else:
         how = (f"{d['config']['probe_years']:g} yr of the recent trend"
                if d.get("sizing") == "trend" else "explicit --probe-dt")
-        print(f"PROBE somtp increment: {d['somtp_dT']:+.3f} K ({how}; heat ratio "
-              f"{d['heat']['used']:.2f}, measured over the last "
-              f"{d['heat'].get('window', 0):g} yr)")
+        h = d["heat"]
+        src = ("set explicitly" if h.get("reason") == "set explicitly"
+               else f"measured over the last {h.get('window', 0):g} yr")
+        print(f"PROBE somtp increment: {d['somtp_dT']:+.3f} K ({how}; = TS step / "
+              f"ocean heat fraction {h['ocean_fraction']:.2f}, {src})")
         print(f"  TS {d['TS_now']:.2f} -> {d['TS_after']:.2f} K ({d['dTS']:+.2f}); after "
               f"{d['config']['recent_years']} settled years 'check' resolves "
               f"lambda >= ~{d['lambda_detectable']:.2f} W/m2/K")
@@ -206,6 +208,18 @@ def _print_probe(d, json_path) -> int:
         Path(json_path).write_text(json.dumps(d, indent=2))
         print(f"wrote {json_path}")
     return 0
+
+
+def _heat_ratio(args):
+    """somtp step / TS step from --ocean-fraction (or the old --heat-ratio)."""
+    f = getattr(args, "ocean_fraction", None)
+    if f is not None:
+        if args.heat_ratio is not None:
+            raise ValueError("give --ocean-fraction or --heat-ratio, not both")
+        if not (0.2 <= f <= 1.0):
+            raise ValueError(f"--ocean-fraction must be in [0.2, 1], got {f}")
+        return 1.0 / f
+    return args.heat_ratio
 
 
 def cmd_advise_ocean(args) -> int:
@@ -222,7 +236,7 @@ def cmd_advise_ocean(args) -> int:
     if args.probe or args.probe_dt is not None:
         pc = ProbeConfig(probe_years=args.probe_years, probe_dT=args.probe_dt,
                          max_dT=args.max_dt, imbalance=args.imbalance, since_year=since,
-                         heat_ratio=args.heat_ratio)
+                         heat_ratio=_heat_ratio(args))
         d = probe_ocean(cols, args.case, pc, start_year=_start_year(args),
                         provenance=file_provenance(args.trend_dir, args.case))
         return _print_probe(d, args.json)
@@ -230,7 +244,7 @@ def cmd_advise_ocean(args) -> int:
     cfg = OceanAdvisorConfig(window_years=args.window, which=args.which,
                              imbalance=args.imbalance, n_fraction=args.n_fraction,
                              N_target=args.n_target, max_dT=args.max_dt,
-                             heat_ratio=args.heat_ratio, gate=gate, since_year=since)
+                             heat_ratio=_heat_ratio(args), gate=gate, since_year=since)
     adv = advise_ocean(cols, args.case, cfg, start_year=_start_year(args),
                        provenance=file_provenance(args.trend_dir, args.case))
     d = adv.to_dict()
@@ -252,9 +266,13 @@ def cmd_advise_ocean(args) -> int:
               f"(heat stored by the atmosphere; trend {lk['trend_per_yr']:+.3f}/yr)")
     h = d["heat"]
     if h.get("measured"):
-        print(f"heat capacities: ocean {h['C_ocean']:.1f}, total {h['C_total']:.1f} "
-              f"W yr/m2/K -> heat ratio {h['ratio']:.2f} (used {h['used']:.2f}"
-              f"; over the last {h['window']:g} yr)")
+        print(f"heat capacities over the last {h['window']:g} yr: ocean "
+              f"{h['C_ocean']:.1f}, atmosphere {h['C_total'] - h['C_ocean']:.1f}, total "
+              f"{h['C_total']:.1f} W yr/m2/K -> ocean heat fraction "
+              f"{h['ocean_fraction_measured']:.2f} (atmosphere "
+              f"{1 - h['ocean_fraction_measured']:.2f})"
+              + ("" if h["used"] == h["ratio"] else
+                 f"; used {h['ocean_fraction']:.2f} ({h['reason']})"))
     if d["C_eff_m_seawater"] is not None:
         print(f"effective heat capacity {d['C_eff_W_yr_m2_K']:.2f} W yr/m2/K "
               f"(~{d['C_eff_m_seawater']:.0f} m of sea water)   relaxation time "
@@ -269,7 +287,7 @@ def cmd_advise_ocean(args) -> int:
     else:
         note = (f" (clipped from {adv.somtp_dT_raw:+.3f})" if adv.clipped else "")
         print(f"RECOMMENDED somtp increment: {adv.somtp_dT:+.3f} K{note}"
-              f"   (heat ratio {adv.heat['used']:.2f})")
+              f"   (= TS step / ocean heat fraction {adv.heat['ocean_fraction']:.2f})")
         print(f"  TS {adv.TS_now:.2f} -> {adv.TS_after:.2f} K; skips ~"
               f"{_fmt(adv.years_skipped, 3)} model years")
         print(f"  expected after adjustment: {cfg.imbalance} ~ {adv.N_after:+.2f} W/m2")
@@ -653,8 +671,8 @@ def cmd_check(args) -> int:
     if "dTS_first" in m:
         print(f"  landed: first-year TS moved {m['dTS_first']:+.2f} K net of drift vs "
               f"{m['dTS_expected']:+.2f} expected"
-              + (f" (implied heat ratio {m['heat_ratio_implied']:.2f})"
-                 if "heat_ratio_implied" in m else ""))
+              + (f" (implied ocean heat fraction {1 / m['heat_ratio_implied']:.2f})"
+                 if m.get("heat_ratio_implied") else ""))
     if "lambda" in m:
         print(f"  probe: TS {m['TS_pre']:.2f} -> {m['TS_post']:.2f} K, energy "
               f"{m['N_pre']:+.2f} -> {m['N_post']:+.2f} W/m2 (± {m['se_dN']:.2f}); "
@@ -844,10 +862,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="absolute target imbalance, W/m2 (overrides --n-fraction)")
     o.add_argument("--max-dt", type=float, default=10.0,
                    help="hard clip on the somtp increment, K (10)")
+    o.add_argument("--ocean-fraction", type=float, default=None,
+                   help="ocean heat fraction C_ocean/C_total: the share of a TS "
+                        "change's heat the slab holds; somtp moves by TS step / this "
+                        "(default: measured, clipped to [0.25, 1]; 'check' reports the "
+                        "implied value)")
     o.add_argument("--heat-ratio", type=float, default=None,
-                   help="somtp increment / TS change, to cover the heat the "
-                        "atmosphere takes back (default: measured C_total/C_ocean, "
-                        "clipped to [1, 4]; 'check' reports the implied value)")
+                   help=argparse.SUPPRESS)          # old name: 1 / --ocean-fraction
     o.add_argument("--max-extrapolation-ratio", type=float, default=5.0)
     o.add_argument("--probe", action="store_true",
                    help="probe mode: step TS ahead by the recent trend x "

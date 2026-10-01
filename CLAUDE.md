@@ -65,8 +65,8 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   heat stored by the atmosphere (vapor column; shown by an equilibrated 3-bar
   run where it closes to ~0), which bends a TOA Gregory line — NOT a leak (an
   earlier reading, corrected). Gregory line TS(N_bot), current state must lie
-  on it, jump floor = interannual TS scatter; somtp increment × measured
-  heat ratio C_total/C_ocean (~1.4 at 338 K, ~3.4 at 370 K; clip [1, 4]). Uniform by default; `pattern` = measured warming
+  on it, jump floor = interannual TS scatter; somtp increment = TS step ÷
+  measured ocean heat fraction C_ocean/C_total ("heat ratio" = its inverse; f_ocean ~0.7 at 338 K, ~0.3 at 370 K; clip [0.25, 1]). Uniform by default; `pattern` = measured warming
   pattern (user asked for both). **Probe mode** (user decision: flattening N
   is not proof of runaway; a warm perturbation maps the trajectory): step
   = recent TS trend × probe_years behind the time-domain gate, or explicit;
@@ -87,7 +87,7 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   run's atm.log, refused unless they reproduce TEOUT to 0.1 %.
   Troposphere only: nothing changes at p < 100 hPa, log-p taper from 200 hPa
   (user: the stratosphere is numerically fragile). Coupled advice:
-  somtp by ΔTS (heat ratio 1). Rehearsed on D4 copies; not yet run in-model.
+  somtp by ΔTS (ocean heat fraction 1). Rehearsed on D4 copies; not yet run in-model.
 
 ### Open (do NOT implement without a user decision)
 

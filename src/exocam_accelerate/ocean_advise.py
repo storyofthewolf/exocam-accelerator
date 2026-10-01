@@ -353,6 +353,14 @@ def measure_heat_ratio(columns, mask, setting: Optional[float] = None,
         out["used"] = float(min(max(out["ratio"], 1.0), max_ratio))
         if out["used"] != out["ratio"]:
             out["reason"] = f"measured {out['ratio']:.2f} clipped to {out['used']:.2f}"
+    # the same quantity as fractions of the heat a TS change takes: the ocean's
+    # share f_ocean = C_ocean/C_total and the atmosphere's 1 - f_ocean. A somtp
+    # step of dTS / f_ocean leaves TS dTS warmer once the atmosphere has taken
+    # its share (``ratio``/``used`` = 1/f_ocean, kept for the JSON schema).
+    out["ocean_fraction"] = 1.0 / out["used"]
+    out["atm_fraction"] = 1.0 - out["ocean_fraction"]
+    if out["ratio"]:
+        out["ocean_fraction_measured"] = 1.0 / out["ratio"]
     return out
 
 

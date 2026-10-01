@@ -514,7 +514,7 @@ def any_payload(cols, case, start_year, q, logs, maps=None, profiles=None) -> di
         if q.get("probe", [""])[0] in ("1", "true"):
             pr = ProbeConfig(probe_years=_num(q, "probe_years") or 15.0,
                              probe_dT=_num(q, "probe_dT"), max_dT=oc.max_dT,
-                             imbalance=oc.imbalance)
+                             imbalance=oc.imbalance, heat_ratio=oc.heat_ratio)
         return ocean_payload(cols, case, start_year, oc, logs, maps, pr, profiles)
     p = case_payload(cols, case, start_year, config_from_query(q), logs)
     p["regime"] = "ice"

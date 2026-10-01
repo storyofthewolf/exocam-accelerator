@@ -141,8 +141,8 @@ body.ocean .ice-only, body:not(.ocean) .ocean-only { display: none; }
       <input type="range" id="mdt" min="0.5" max="15" step="0.5" value="10">
     </div>
     <div class="ctl ocean-only">
-      <label>heat ratio (somtp / TS change) <b id="hr_v"></b></label>
-      <input type="range" id="hr" min="1" max="2.5" step="0.05" value="1">
+      <label><span><input type="checkbox" id="hr_auto" checked> ocean heat fraction: measured</span> <b id="hr_v"></b></label>
+      <input type="range" id="hr" min="0.25" max="1" step="0.01" value="0.5">
     </div>
     <div class="ctl ocean-only">
       <label><span><input type="checkbox" id="probe"> probe mode</span> <b id="py_v"></b></label>
@@ -192,7 +192,8 @@ function params() {
   p.set('n_fraction', $('#nf').value);
   p.set('max_ice_factor', $('#mf').value);
   p.set('max_dT', $('#mdt').value);
-  p.set('heat_ratio', $('#hr').value);
+  // the slider is the ocean heat fraction; the advisor takes its inverse
+  if (!$('#hr_auto').checked) p.set('heat_ratio', (1 / Number($('#hr').value)).toFixed(4));
   p.set('imbalance', $('#imb').value);
   if ($('#probe').checked || $('#pdt').value) { p.set('probe', '1'); p.set('probe_years', $('#py').value); }
   if ($('#pdt').value) p.set('probe_dT', $('#pdt').value);
@@ -734,7 +735,7 @@ function renderOcean(d) {
       <div class="tile"><div class="k">TS at equilibrium</div><div class="v">${G ? fmt(G.c0, 1) : '–'}</div><div class="s">${G ? `line: TS = ${fmt(G.c0, 1)} ${sgn(G.c1, 2)}·N, r ${fmt(G.corr, 3)}` : 'no trusted line'}</div></div>
       <div class="tile"><div class="k">years skipped</div><div class="v">${a.years_skipped ? '~' + fmt(a.years_skipped, 0) : '–'}</div><div class="s">τ ${a.tau_years ? fmt(a.tau_years, 1) + ' yr' : '–'} (one box)</div></div>
       <div class="tile"><div class="k">heat capacity</div><div class="v">${a.C_eff_m_seawater ? '~' + fmt(a.C_eff_m_seawater, 0) + ' m' : '–'}</div><div class="s">of sea water, from ∑N vs TS</div></div>
-      <div class="tile"><div class="k">heat ratio</div><div class="v">${a.heat && a.heat.ratio ? fmt(a.heat.ratio, 2) : '–'}</div><div class="s">C<sub>total</sub>/C<sub>ocean</sub>${a.heat && a.heat.C_total ? ` = ${fmt(a.heat.C_total, 1)}/${fmt(a.heat.C_ocean, 1)}` : ''}; TOA − surface ${a.gap && a.gap.mean !== null ? sgn(a.gap.mean, 1) : '–'} W/m²</div></div>
+      <div class="tile"><div class="k">ocean heat fraction</div><div class="v">${a.heat && a.heat.ratio ? fmt(1 / a.heat.ratio, 2) : '–'}</div><div class="s">C<sub>ocean</sub>/C<sub>total</sub>${a.heat && a.heat.C_total ? ` = ${fmt(a.heat.C_ocean, 1)}/${fmt(a.heat.C_total, 1)}` : ''}; somtp step = TS step ÷ this. TOA − surface ${a.gap && a.gap.mean !== null ? sgn(a.gap.mean, 1) : '–'} W/m²</div></div>
     </div>
     ${reasons || warns ? `<ul class="msgs">${reasons}${warns}</ul>` : ''}
     ${d.jumps.length ? oceanJumpTable(d) : ''}
@@ -788,7 +789,7 @@ function oceanJumpTable(d) {
       return `<tr><td>year ${j.year}<br><span class="hint">${j.restart_date || ''}</span></td>
         <td>${sgn(j.somtp_dT, 2)} K${j.patterned ? '<br><span class="hint">patterned</span>' : ''}${j.coupled ? '<br><span class="hint">+ atmosphere (T, q)</span>' : ''}</td>
         <td>TS ${fmt(j.advice.TS_after, 2)} K, N ${sgn(j.advice.N_after)}${m.N_obs !== undefined ? `<br><span class="hint">observed N ${sgn(m.N_obs)}, off-line ${sgn(m.dN)} ± ${fmt(m.tol_N)}</span>` : ''}
-          ${m.heat_ratio_implied !== undefined ? `<br><span class="hint">implied heat ratio ${fmt(m.heat_ratio_implied, 2)}</span>` : ''}</td>
+          ${m.heat_ratio_implied !== undefined ? `<br><span class="hint">implied ocean heat fraction ${fmt(1 / m.heat_ratio_implied, 2)}</span>` : ''}</td>
         <td>${statusChip(c.verdict) || '–'}</td>
         <td>${c.post_years ?? '–'} / ${c.settled_years ?? '–'}</td>
         <td><ul class="msgs">${(c.reasons || []).map(r => `<li>${r}</li>`).join('')}</ul></td></tr>`;
@@ -1014,7 +1015,9 @@ function labels() {
   $('#nf_v').textContent = Number($('#nf').value).toFixed(2);
   $('#mf_v').textContent = '×' + Number($('#mf').value).toFixed(2);
   $('#mdt_v').textContent = '±' + Number($('#mdt').value).toFixed(1) + ' K';
-  $('#hr_v').textContent = Number($('#hr').value).toFixed(2);
+  $('#hr_v').textContent = $('#hr_auto').checked ? 'auto'
+    : Number($('#hr').value).toFixed(2) + ' (somtp ×' + (1 / Number($('#hr').value)).toFixed(2) + ')';
+  $('#hr').disabled = $('#hr_auto').checked;
   $('#py_v').textContent = $('#py').value + ' yr of trend';
 }
 function changed() {
@@ -1022,6 +1025,7 @@ function changed() {
   clearTimeout(t0); t0 = setTimeout(() => { loadCase(); loadCases(); }, 180);
 }
 ['#nf', '#mf', '#mdt', '#hr', '#py'].forEach(s => $(s).addEventListener('input', changed));
+$('#hr_auto').addEventListener('change', changed);
 ['#win', '#which', '#nt', '#since', '#imb', '#probe', '#pdt'].forEach(s => $(s).addEventListener('change', changed));
 $('#reset').onclick = () => { for (const [k, v] of Object.entries(DEFAULTS)) $('#' + k).value = v; $('#probe').checked = false; changed(); };
 $('#theme').onclick = () => {

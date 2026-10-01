@@ -68,6 +68,19 @@ Consequences:
 `runmgr check --energy`'s Etop therefore lags convergence (it includes the
 storage term) but is not biased at equilibrium.
 
+**Terminology (user, 2026-10-01): ocean heat fraction.** The ratio is easier
+read as its inverse: the **ocean heat fraction** f_ocean = C_ocean/C_total,
+the share of the heat behind a TS change that the slab holds (the atmosphere
+holds f_atm = 1 − f_ocean). A somtp step of ΔTS / f_ocean leaves TS ΔTS
+warmer. Measured: f_ocean ≈ 0.7 (D1, 338 K), 0.5 (D2, 353 K), 0.3 (D4/D5,
+370–375 K). CLI `--ocean-fraction` (the old `--heat-ratio` = 1/f_ocean still
+works, hidden); printouts, the viewer slider/tile and `check`'s "implied
+ocean heat fraction" use the fraction. The JSON keeps `heat_ratio` /
+`heat.used` for compatibility and adds `heat.ocean_fraction`,
+`heat.atm_fraction`. (The viewer used to send its heat-ratio slider value — 1
+by default — with every request, silently overriding the measured value; the
+slider now has a "measured" checkbox, on by default.)
+
 ## Finding 2: the TS(N) relation steepens in the hottest runs
 
 D4/D5 warm steadily (0.33 and 0.55 K/yr over the last 15 years) while
