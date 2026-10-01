@@ -187,6 +187,12 @@ class ProfileConfig:
     top: object = "auto"
     #: linear taper to zero over this many levels above the top
     taper_levels: int = 2
+    #: troposphere-only ceiling (Pa): nothing is changed at pressures below
+    #: ``ceiling_Pa`` (the stratosphere and above are numerically fragile), and
+    #: the jump ramps from full strength at ``taper_bottom_Pa`` to zero at the
+    #: ceiling, linearly in log p. Applies on top of ``top``.
+    ceiling_Pa: float = 1.0e4
+    taper_bottom_Pa: float = 2.0e4
     #: refuse a profile measured over less surface warming than this (K)
     min_dTS: float = 0.5
 
@@ -197,6 +203,15 @@ class ProfileConfig:
             raise ValueError("max_gain must be in (0, 10]")
         if self.top != "auto" and not (isinstance(self.top, (int, float)) and self.top > 0):
             raise ValueError(f"top must be 'auto' or a pressure in Pa, got {self.top!r}")
+        if not (0.0 < self.ceiling_Pa < self.taper_bottom_Pa):
+            raise ValueError("need 0 < ceiling_Pa < taper_bottom_Pa")
+
+
+def ceiling_weight(p, ceiling_Pa: float, taper_bottom_Pa: float) -> np.ndarray:
+    """1 at p >= taper_bottom_Pa, 0 at p <= ceiling_Pa, linear in log p between."""
+    p = np.asarray(p, dtype=float)
+    x = (np.log(p) - np.log(ceiling_Pa)) / (np.log(taper_bottom_Pa) - np.log(ceiling_Pa))
+    return np.clip(x, 0.0, 1.0)
 
 
 @dataclass(frozen=True)
@@ -219,7 +234,11 @@ class AtmProfile:
                 "gain_max": float(self.gain.max()),
                 "gain_mass_weighted": float(np.average(self.gain, weights=np.gradient(self.p_mid))),
                 "smooth": self.config.smooth, "max_gain": self.config.max_gain,
-                "top": self.config.top, "taper_levels": self.config.taper_levels}
+                "top": self.config.top, "taper_levels": self.config.taper_levels,
+                "ceiling_Pa": self.config.ceiling_Pa,
+                "taper_bottom_Pa": self.config.taper_bottom_Pa,
+                "gain_above_ceiling_max": float(
+                    np.abs(self.gain[self.p_mid < self.config.ceiling_Pa]).max(initial=0.0))}
 
 
 def measured_profile(T_old, T_new, dTS: float, p_mid_now, dt_years: float,
@@ -261,7 +280,12 @@ def measured_profile(T_old, T_new, dTS: float, p_mid_now, dt_years: float,
     # above the top the measured gain is negative (stratosphere) or noise: ramp
     # the top level's gain down to zero instead
     g = np.where(np.arange(n) < k0, g[k0] * w, g)
-    return AtmProfile(g, raw, p, T_new, float(dTS), float(dt_years), int(k0), config)
+    # troposphere only: zero at and above the ceiling, log-p ramp below it
+    wc = ceiling_weight(p, config.ceiling_Pa, config.taper_bottom_Pa)
+    g = g * wc
+    full = np.where((wc >= 1.0) & (np.arange(n) >= k0))[0]
+    k_full = int(full[0]) if full.size else n - 1
+    return AtmProfile(g, raw, p, T_new, float(dTS), float(dt_years), k_full, config)
 
 
 # ---------------------------------------------------------------------------

@@ -99,14 +99,32 @@ def test_measured_profile_auto_top_and_taper():
     p = np.geomspace(10, 4e5, 10)
     T_old = np.full(10, 300.0)
     dT = np.array([-3, -2, -1, 0.5, 2, 2.5, 2, 1.5, 1.2, 1.0])
-    prof = measured_profile(T_old, T_old + 2 * dT, 2.0, p, 10.0, ProfileConfig(smooth=0))
+    nocap = dict(ceiling_Pa=1.0, taper_bottom_Pa=2.0)      # ceiling out of the way
+    prof = measured_profile(T_old, T_old + 2 * dT, 2.0, p, 10.0,
+                            ProfileConfig(smooth=0, **nocap))
     np.testing.assert_allclose(prof.raw_gain, dT)
     assert prof.top_index == 3
     # taper: the top level's gain ramped to zero over two levels
     np.testing.assert_allclose(prof.gain[:3], [0.0, 0.5 / 3, 0.5 * 2 / 3])
     np.testing.assert_allclose(prof.gain[3:], dT[3:])
     fixed = measured_profile(T_old, T_old + 2 * dT, 2.0, p, 10.0,
-                             ProfileConfig(smooth=0, top=1e4, taper_levels=0))
+                             ProfileConfig(smooth=0, top=1e4, taper_levels=0, **nocap))
     assert fixed.gain[p < 1e4].max() == 0 and fixed.gain[-1] == pytest.approx(1.0)
     with pytest.raises(ValueError, match="noise"):
         measured_profile(T_old, T_old + 0.1, 0.1, p, 10.0)
+
+
+def test_profile_troposphere_ceiling():
+    # warming measured all the way up (no auto top): the 100 hPa ceiling cuts it
+    p = np.geomspace(100, 4e5, 30)
+    T_old = np.full(30, 300.0)
+    prof = measured_profile(T_old, T_old + 2.0, 1.0, p, 10.0, ProfileConfig(smooth=0))
+    assert np.all(prof.gain[p <= 1e4] == 0.0)                 # nothing at or above 100 hPa
+    np.testing.assert_allclose(prof.gain[p >= 2e4], 2.0)      # full strength below 200 hPa
+    mid = (p > 1e4) & (p < 2e4)
+    assert mid.any() and np.all((prof.gain[mid] > 0) & (prof.gain[mid] < 2.0))
+    assert np.all(np.diff(prof.gain[mid]) > 0)                # ramps up with pressure
+    assert prof.p_mid[prof.top_index] >= 2e4
+    assert prof.summary()["gain_above_ceiling_max"] == 0.0
+    with pytest.raises(ValueError):
+        ProfileConfig(ceiling_Pa=2e4, taper_bottom_Pa=1e4)

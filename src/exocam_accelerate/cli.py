@@ -335,7 +335,9 @@ def cmd_atm_profile(args) -> int:
     domain = args.domain_file or (find_docn_domain(args.rundir) if args.rundir else None)
     top = "auto" if args.top in (None, "auto") else float(args.top)
     prof, sources = build_atm_profile(args.archive, case, date, args.baseline_years,
-                                      domain, ProfileConfig(top=top))
+                                      domain, ProfileConfig(
+                                          top=top, ceiling_Pa=args.ceiling * 100.0,
+                                          taper_bottom_Pa=args.taper_bottom * 100.0))
     out_json = Path(args.json)
     stem = out_json.name[:-5] if out_json.name.endswith(".json") else out_json.name
     pfile = out_json.with_name(stem + ".atmprofile.nc")
@@ -349,7 +351,9 @@ def cmd_atm_profile(args) -> int:
           f"(surface warmed {s_['dTS_baseline']:+.2f} K)")
     print(f"per K of surface warming: {s_['gain_surface']:.2f} K at the lowest level, "
           f"max {s_['gain_max']:.2f}, mass-weighted {s_['gain_mass_weighted']:.2f}; "
-          f"applied up to {s_['top_pressure_Pa'] / 100:.1f} hPa (level {s_['top_level']})")
+          f"full strength up to {s_['top_pressure_Pa'] / 100:.1f} hPa (level "
+          f"{s_['top_level']}), tapering to zero at the {s_['ceiling_Pa'] / 100:.0f} hPa "
+          f"ceiling (troposphere only)")
     print(f"COUPLED jump: TS {out['TS_now']:.2f} -> {out['TS_after']:.2f} K "
           f"(somtp {out['somtp_dT']:+.2f} K instead of {out['somtp_dT_ocean_only']:+.2f} "
           f"ocean-only; atmosphere T per level x{out['somtp_dT']:+.2f} K, q at fixed RH)")
@@ -886,6 +890,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap_.add_argument("--top", default="auto",
                      help="'auto' (up to where the measured warming turns negative) or "
                           "a pressure in Pa above which nothing changes")
+    ap_.add_argument("--ceiling", type=float, default=100.0,
+                     help="troposphere-only ceiling, hPa: T and q are never changed at "
+                          "lower pressures (default 100)")
+    ap_.add_argument("--taper-bottom", type=float, default=200.0,
+                     help="full-strength jump below this pressure, hPa; log-p ramp to "
+                          "zero at --ceiling (default 200)")
     ap_.add_argument("--json", required=True,
                      help="coupled advice JSON (profile beside it as "
                           "<name>.atmprofile.nc)")

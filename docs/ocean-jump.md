@@ -297,6 +297,16 @@ up to 2.8 K/K near 50 hPa, stratosphere cooling (−4.7 K/K at the top, not
 applied). Measured q rises 3.8 %/K near the surface — the fixed-RH
 Clausius–Clapeyron rate at 372 K.
 
+**Troposphere only (user decision 2026-10-01):** the stratosphere and above
+are numerically fragile, so T and q are never changed at pressures below
+100 hPa (`--ceiling`), and the jump ramps from full strength at 200 hPa
+(`--taper-bottom`) to zero at the ceiling, linearly in log p. This applies
+on top of the "auto" top, whichever is more restrictive. On D4 the auto top
+alone reached ~3 hPa (gain 2.6–2.9 K/K between 20 and 100 hPa); with the
+ceiling the mass-weighted gain falls only from 1.59 to 1.51. The model warms
+the 20–100 hPa layer itself after the jump. A deep (4-bar) atmosphere's
+tropopause may sit above 100 hPa — `--ceiling` is per case.
+
 The coupled advice keeps the ocean advice's TS target but drops the heat
 ratio: somtp moves by ΔTS itself and the atmosphere by gain × ΔTS. Consistency
 check: a 1 K coupled jump on D4 puts 22–29 W·yr/m²/K into the atmosphere

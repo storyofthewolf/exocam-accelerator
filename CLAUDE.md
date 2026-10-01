@@ -83,7 +83,9 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   RH (`atmos.py`, `restart.apply_atmos_jump`, `cli atm-profile`). Keeps dry
   mass per layer (DELP, PS), recomputes **TEOUT** (else the energy fixer
   undoes the jump on step 1), shifts TCWAT/QCWAT/T_TTEND; constants from the
-  run's atm.log, refused unless they reproduce TEOUT to 0.1 %. Coupled advice:
+  run's atm.log, refused unless they reproduce TEOUT to 0.1 %.
+  Troposphere only: nothing changes at p < 100 hPa, log-p taper from 200 hPa
+  (user: the stratosphere is numerically fragile). Coupled advice:
   somtp by ΔTS (heat ratio 1). Rehearsed on D4 copies; not yet run in-model.
 
 ### Open (do NOT implement without a user decision)
