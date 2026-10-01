@@ -250,8 +250,10 @@ reasons), the phase-space picture N vs hi with the fitted conduction law and
 the jump's landing point, TS vs N, the model years a jump skips (Stefan
 growth on the model clock, post-jump data in equivalent years), time series
 with fit window and predicted levels, and each jump's `check` verdict.
-Hot, ice-free cases get the ocean layout instead: TS against `energy_bot`
-with the Gregory line (and every fit window tried), the same years against
+Phase-space panels are drawn as Gregory plots (imbalance on y, temperature
+on x), and every time-series row can show its time derivative (values / d/dt /
+both; centered 5-yr slope, piecewise between jumps). Hot, ice-free cases get
+the ocean layout instead: `energy_bot` against TS with the Gregory line (and every fit window tried), the same years against
 `energy_top` (the offset is atmospheric storage), `energy_bot` vs `energy_top`, the
 one-box projection a jump short-cuts, and lat-lon maps of any `*.latlon.nc`
 (`somtp-map`) or `*.pattern.nc` (`pattern`) files in `DIR`.
