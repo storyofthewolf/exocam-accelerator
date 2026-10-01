@@ -246,8 +246,9 @@ def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
                ``somtp_dT / heat_ratio`` (net of the pre-jump drift); the
                ratio observed is reported as ``heat_ratio_implied`` —
                the measurement the next jump's ``--heat-ratio`` needs;
-    * on-line: settled-year N ~ (TS - c0)/c1, the Gregory line the jump relied
-               on, relative to the run's offset from it just before the jump;
+    * on-line: settled-year N ~ the relation the jump relied on (the local
+               curve N(TS), or the Gregory line (TS - c0)/c1), relative to the
+               run's offset from it just before the jump;
     * sanity:  non-finite data in the post-jump years is a FAIL, never a PASS.
     """
     advice = jump_log.get("advice") or {}
@@ -255,15 +256,13 @@ def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
         return check_ocean_probe(columns, jump_log, start_year, ProbeCheckConfig(
             settle_years=config.settle_years))
     jump_year = int(jump_log["jump_model_year"])
-    greg = advice.get("gregory") or {}
+    from .ocean_advise import reference_curve
     try:
-        c0, c1 = greg["fits"]["linear"]["params"]
+        N_of, _ = reference_curve(advice)
         TS_before = float(advice["TS_now"])
-    except (KeyError, TypeError, ValueError):
-        raise ValueError("jump log carries no Gregory fit (advice.gregory.fits.linear); "
-                         "was the jump made with --delta-t alone?")
-    if not greg.get("accepted"):
-        raise ValueError("the jump log's Gregory reference was not accepted")
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"jump log carries no usable reference relation ({e}); was "
+                         f"the jump made with --delta-t alone?")
     cfg = advice.get("config") or {}
     imbalance = cfg.get("imbalance", "energy_bot")
     heat_ratio = float(cfg.get("heat_ratio") or 1.0)
@@ -323,8 +322,8 @@ def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
         return done(Verdict.WAIT)
 
     last = (years < jump_year) & (years >= jump_year - config.baseline_years)
-    bias = float(np.mean(N[last] - (T[last] - c0) / c1)) if last.any() else 0.0
-    N_line = (T[settled] - c0) / c1
+    bias = float(np.mean(N[last] - N_of(T[last]))) if last.any() else 0.0
+    N_line = N_of(T[settled])
     dN = float(np.mean(N[settled] - N_line)) - bias
     tol_N = max(config.tol_N, 2.0 * sig_N / np.sqrt(n_set))
     metrics.update(N_obs=float(N[settled].mean()), N_line=float(N_line.mean()), dN=dN,

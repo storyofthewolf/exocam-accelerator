@@ -9,15 +9,24 @@ with a law of its own like the Stefan ice: the whole surface-atmosphere system
 relaxes toward N = 0 along its Gregory line, so the phase-space picture is
 the classic one:
 
-* ``TS = c0 + c1*N`` over a fit window (linear; the saturating form is fitted
-  alongside, and a disagreement between the two is refused as a kink —
-  near-runaway curvature). ``c1 < 0`` is required: TS must rise as N falls,
-  otherwise there is no stable equilibrium in reach.
+* default (``fit="local"``, 2026-10-01): the Gregory relation is not a line
+  for hot planets — the feedback parameter is itself a function of
+  temperature, with distinct regimes (Wolf et al. 2018, JGR-A, Fig. 4). N(TS)
+  is fitted as a quadratic about the current state over the longest window
+  with a usable fit, on native annual means; alpha_diff = -dN/dTS there (the
+  differential climate feedback parameter of Gregory et al. 2004) must be > 0
+  and resolved at 2 sigma, and the jump follows the curve toward the target
+  (the curvature only where it is resolved, else the tangent).
+* ``fit="line"``: ``TS = c0 + c1*N`` over a fit window (the original advisor;
+  the saturating form is fitted alongside, and a disagreement between the two
+  is refused as a kink). ``c1 < 0`` is required.
 * The jump removes a fraction of the current imbalance: ``N_target =
   N_now*(1 - n_fraction)`` (or an explicit ``N_target`` between N_now and 0),
   so ``dTS = c1*(N_target - N_now)``.
 
-Which imbalance. The slab ocean is in equilibrium when the net surface flux
+Which imbalance. Default ``energy_top`` (user decision 2026-10-01: the TOA
+balance defines convergence). The history below explains energy_bot, which
+the line fit preferred and which remains selectable. The slab ocean is in equilibrium when the net surface flux
 into it vanishes (``energy_bot`` = 0; q-flux integrates to zero): ``energy_bot``
 = C_ocean dTS/dt with C_ocean the mixed layer. ``energy_top`` exceeds it by the
 heat the atmosphere stores while it warms, C_atm dTS/dt — and in these hot,
@@ -82,7 +91,11 @@ class OceanAdvisorConfig:
     #: tried longest first; the longest whose TS(N) relation passes the gate
     auto_windows: Tuple[float, ...] = (40.0, 30.0, 20.0, 10.0)
     which: str = "int2"
-    imbalance: str = "energy_bot"
+    #: energy_top, the TOA balance (user 2026-10-01: the quantity that defines
+    #: convergence; Wolf et al. 2018 use it too). With the local fit it gives
+    #: the equilibrium earlier than energy_bot (3-bar hindcast, D1-D3), whose
+    #: ~3x larger interannual noise leaves alpha_diff mostly unresolved
+    imbalance: str = "energy_top"
     n_fraction: float = 0.5
     N_target: Optional[float] = None
     #: hard clip on the area-mean somtp increment, K
@@ -108,6 +121,28 @@ class OceanAdvisorConfig:
     #: first model years never used (fast initial adjustment)
     spinup_years: int = 5
     gate: PhaseGateConfig = field(default_factory=PhaseGateConfig)
+    #: "local": the differential feedback parameter (Gregory et al. 2004; Wolf
+    #: et al. 2018 Fig. 4) — N(TS) fitted as a quadratic about the current
+    #: state, alpha_diff = -dN/dTS there, the jump follows the curve; "line":
+    #: the original single TS = c0 + c1*N line per window
+    fit: str = "local"
+    #: series the local fit uses ("native" annual means: independent years, so
+    #: the standard errors mean something; a running mean is serially
+    #: correlated and makes any significance test overconfident)
+    local_which: str = "native"
+    #: alpha_diff must exceed this many standard errors (else the local
+    #: feedback is not resolved — a probe is the tool); curvature is used only
+    #: when it is resolved at the same level, else the tangent
+    local_sigmas: float = 2.0
+    local_min_points: int = 8
+    local_min_TS_range: float = 0.5
+    #: TS extrapolation limit, in multiples of the TS range the window sampled
+    local_max_extrapolation: float = 3.0
+    #: turn gate refusals (feedback unresolved, state off the curve, curve
+    #: turning before the target, low correlation) into warnings recorded in
+    #: the advice; physical impossibilities (no restoring feedback at all,
+    #: ice, missing data) still refuse
+    override_gate: bool = False
 
     since_year: Optional[int] = None
     #: off by default: hot runs swing 1-2 K a year and decelerate hard early,
@@ -138,6 +173,11 @@ class OceanAdvisorConfig:
                              f"{self.heat_ratio!r}")
         if not (1.0 <= self.max_heat_ratio <= 5.0):
             raise ValueError("max_heat_ratio must be in [1, 5]")
+        if self.fit not in ("local", "line"):
+            raise ValueError(f"fit must be 'local' or 'line', got {self.fit!r}")
+        if self.local_which not in ("native", "int1", "int2"):
+            raise ValueError(f"local_which must be native/int1/int2, got "
+                             f"{self.local_which!r}")
         if self.imbalance not in ("energy_bot", "energy_top"):
             raise ValueError(f"imbalance must be energy_bot or energy_top, got "
                              f"{self.imbalance!r}")
@@ -189,6 +229,11 @@ class OceanAdvice:
     N_last_year: Optional[float] = None
     #: years averaged in ``N_now``
     N_now_years: int = 1
+    #: the local-curve fit (fit="local"): a, b, c of N = a + b x + c x^2,
+    #: x = TS - TS_now; alpha_diff = -b and its se; curvature used; TS_eq
+    local: Optional[dict] = None
+    #: gate refusals turned into warnings by override_gate
+    overridden: tuple = ()
 
     @property
     def jump(self) -> bool:
@@ -226,7 +271,8 @@ class OceanAdvice:
             "window_years": self.window_years,
             "since_year": self.since_year,
             "detected_jumps": list(self.detected_jumps),
-            "config": {"n_fraction": c.n_fraction, "N_target": c.N_target,
+            "config": {"n_fraction": c.n_fraction, "N_target": c.N_target, "fit": c.fit,
+                       "override_gate": c.override_gate,
                        "max_dT": c.max_dT, "min_dT": c.min_dT,
                        "noise_factor": c.noise_factor, "max_offline": c.max_offline,
                        "heat_ratio": self.heat.get("used", 1.0),
@@ -252,6 +298,10 @@ class OceanAdvice:
             "provenance": dict(self.provenance) if self.provenance else None,
             "windows_tried": [{k: (num(v) if isinstance(v, float) else v)
                                for k, v in d.items()} for d in self.windows_tried],
+            "fit": c.fit,
+            "local": ({k: (num(v) if isinstance(v, float) else v)
+                       for k, v in self.local.items()} if self.local else None),
+            "gate_overridden": list(self.overridden),
         }
 
 
@@ -421,15 +471,26 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
             usable &= years > years[icy].max()
     cap = float(usable.sum())
 
+    overridden: List[str] = []
+
     def result(N_now_fit=float("nan"), N_target=float("nan"), window=0.0, greg=None,
                gap=None, dTS=None, dT=None, raw=None, clipped=False, TS_after=None,
-               N_after=None, C_eff=None, tau=None, skipped=None, heat=None):
+               N_after=None, C_eff=None, tau=None, skipped=None, heat=None, local=None):
         return OceanAdvice(case, model_year, N_now, float(N_now_fit), float(N_target),
                            float(TS_nat[-1]) if TS_nat is not None else float("nan"),
                            config, which, float(window), since, tuple(detected), greg,
                            gap or {}, dTS, dT, raw, clipped, TS_after, N_after, C_eff,
                            tau, skipped, tuple(reasons), tuple(warnings), provenance,
-                           tuple(windows), heat or {}, N_now_se, N_last_year, k_now)
+                           tuple(windows), heat or {}, N_now_se, N_last_year, k_now,
+                           local, tuple(overridden))
+
+    def gate_refusal(msg: str) -> bool:
+        """A refusal the user may override: True if it stands."""
+        if config.override_gate:
+            overridden.append(msg)
+            warnings.append(f"gate overridden: {msg}")
+            return False
+        return True
 
     if not have_T:
         reasons.append(f"no {SURFACE_VAR} series in the trend output")
@@ -490,6 +551,11 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
     ttail = ttail[np.isfinite(ttail)]
     sig_T = _scatter(ttail)
     min_move = max(config.min_dT, config.noise_factor * sig_T)
+
+    if config.fit == "local":
+        return _advise_local(columns, config, t, usable, cands, TS_now, TS_nat, N_nat,
+                             N_rec, T_rec, tol_off, min_move, reasons, warnings,
+                             windows, gate_refusal, result)
 
     chosen = None
     tried: List[str] = []
@@ -609,6 +675,217 @@ def advise_ocean(columns: Dict[str, np.ndarray], case: str,
                   dT, raw, clipped, TS_after, N_after, C_eff, tau, skipped, heat)
 
 
+def reference_curve(advice: dict):
+    """N as a function of TS on the relation an advice was sized on: the local
+    curve (fit="local") or the Gregory line. Returns (N_of_TS, TS_eq) or raises
+    ValueError if the advice carries neither."""
+    loc = advice.get("local")
+    if loc:
+        a, b, c = loc["a"], loc["b"], loc.get("c_used") or 0.0
+        T0 = float(advice["TS_now"])
+
+        def N_of(T):
+            x = np.asarray(T, dtype=float) - T0
+            return a + b * x + c * x * x
+        eq = loc.get("TS_eq_curve") or loc.get("TS_eq_tangent")
+        return N_of, eq
+    greg = advice.get("gregory") or {}
+    try:
+        c0, c1 = greg["fits"]["linear"]["params"]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("advice carries no reference relation (local curve or "
+                         "Gregory line)")
+    if not greg.get("accepted"):
+        raise ValueError("the advice's Gregory reference was not accepted")
+    return (lambda T: (np.asarray(T, dtype=float) - c0) / c1), c0
+
+
+def fit_local_curve(T, N, TS_now: float) -> Optional[dict]:
+    """N = a + b x + c x^2 with x = T - TS_now (ordinary least squares).
+
+    ``-b`` is the differential climate feedback parameter at the current state
+    (Gregory et al. 2004; Wolf et al. 2018, Fig. 4: alpha_diff = dN/dTs is
+    itself a function of temperature for hot, thick atmospheres, so a single
+    line through a long window is the wrong model). Returns the coefficients,
+    their standard errors and the residual scatter, or None if too few points.
+    """
+    T = np.asarray(T, dtype=float)
+    N = np.asarray(N, dtype=float)
+    ok = np.isfinite(T) & np.isfinite(N)
+    T, N = T[ok], N[ok]
+    if T.size < 4:
+        return None
+    x = T - TS_now
+    A = np.vstack([np.ones_like(x), x, x * x]).T
+    coef, *_ = np.linalg.lstsq(A, N, rcond=None)
+    res = N - A @ coef
+    dof = T.size - 3
+    sig = float(np.sqrt((res ** 2).sum() / dof))
+    try:
+        cov = sig ** 2 * np.linalg.inv(A.T @ A)
+    except np.linalg.LinAlgError:
+        return None
+    se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    return {"a": float(coef[0]), "b": float(coef[1]), "c": float(coef[2]),
+            "se_a": float(se[0]), "se_b": float(se[1]), "se_c": float(se[2]),
+            "sigma": sig, "n": int(T.size), "TS_range": float(np.ptp(T))}
+
+
+def _curve_step(a: float, b: float, c: float, N_target: float):
+    """x with a + b x + c x^2 = N_target on the branch the tangent points to;
+    None if the curve turns over before reaching it."""
+    x0 = (N_target - a) / b
+    if c == 0.0:
+        return x0
+    disc = b * b - 4.0 * c * (a - N_target)
+    if disc < 0:
+        return None
+    r = np.sqrt(disc)
+    roots = [(-b + r) / (2 * c), (-b - r) / (2 * c)]
+    same = [x for x in roots if x * x0 > 0 or x == 0.0]
+    if not same:
+        return None
+    x = min(same, key=abs)
+    # the branch must stay monotone (restoring) between here and x
+    if (b + 2 * c * x) * b <= 0:
+        return None
+    return float(x)
+
+
+def _advise_local(columns, config, t, usable, cands, TS_now, TS_nat, N_nat, N_rec,
+                  T_rec, tol_off, min_move, reasons, warnings, windows, gate_refusal,
+                  result) -> "OceanAdvice":
+    """The fit="local" body of ``advise_ocean``: differential feedback at the
+    current state, jump along the local curve."""
+    _, N_l = _annual(columns, config.imbalance, config.local_which)
+    _, T_l = _annual(columns, SURFACE_VAR, config.local_which)
+    k_sig = config.local_sigmas
+    chosen = None
+    tried: List[str] = []
+    for W in cands:
+        m = usable & (t > t[-1] - W)
+        f = fit_local_curve(T_l[m], N_l[m], TS_now)
+        rec = {"window": float(W), "status": "ok"}
+        windows.append(rec)
+        if f is None or f["n"] < config.local_min_points:
+            rec["status"] = "too few points"
+            tried.append(f"{W:g} yr: {rec['status']}")
+            continue
+        alpha, se_a = -f["b"], f["se_b"]
+        rec.update(alpha_diff=alpha, alpha_se=se_a, c=f["c"], c_se=f["se_c"],
+                   N_curve_now=f["a"], TS_range=f["TS_range"])
+        if f["TS_range"] < config.local_min_TS_range:
+            rec["status"] = f"TS moved only {f['TS_range']:.2f} K over the window"
+            tried.append(f"{W:g} yr: {rec['status']}")
+            continue
+        if alpha <= 0:
+            rec["status"] = (f"alpha_diff {alpha:+.2f} ± {se_a:.2f} W/m2/K <= 0: no "
+                             f"restoring feedback at the current state")
+            tried.append(f"{W:g} yr: {rec['status']}")
+            continue
+        chosen = (W, m, f)
+        break
+    if chosen is None:
+        reasons.append("no window gives a usable local curve N(TS): "
+                       + (" | ".join(tried) if tried else "no data")
+                       + " — a probe can map the trajectory")
+        return result(window=cands[0])
+    W, m, f = chosen
+    a, b = f["a"], f["b"]
+    alpha, se_alpha = -b, f["se_b"]
+    curv_ok = abs(f["c"]) > k_sig * f["se_c"]
+    c = f["c"] if curv_ok else 0.0
+    local = {"window": float(W), "which": config.local_which, "a": a, "b": b,
+             "c_fit": f["c"], "c_se": f["se_c"], "c_used": c, "curvature_resolved": curv_ok,
+             "alpha_diff": alpha, "alpha_diff_se": se_alpha, "sigma_N": f["sigma"],
+             "n_years": f["n"], "TS_range": f["TS_range"]}
+    if alpha < k_sig * se_alpha and gate_refusal(
+            f"alpha_diff {alpha:.2f} ± {se_alpha:.2f} W/m2/K is not resolved "
+            f"(< {k_sig:g} sigma) over the last {W:g} yr — a probe can resolve it"):
+        reasons.append(f"local feedback not resolved: alpha_diff {alpha:.2f} ± "
+                       f"{se_alpha:.2f} W/m2/K (< {k_sig:g} sigma) over the last {W:g} yr"
+                       f" — a probe can resolve it")
+    off = N_rec - (a + b * (T_rec - TS_now) + c * (T_rec - TS_now) ** 2)
+    local["offcurve"] = float(off)
+    if abs(off) > max(tol_off, k_sig * f["sigma"] / np.sqrt(max(config.recent_years, 1))) \
+            and gate_refusal(f"current state {off:+.2f} W/m2 off the local curve"):
+        reasons.append(f"current state {off:+.2f} W/m2 off the local curve (tolerance "
+                       f"{tol_off:.2f})")
+    # equilibrium estimates: tangent and curve
+    local["TS_eq_tangent"] = float(TS_now + a / alpha)
+    xe = _curve_step(a, b, c, 0.0)
+    local["TS_eq_curve"] = None if xe is None else float(TS_now + xe)
+
+    N_now_fit = a
+    if config.N_target is not None:
+        N_target = float(config.N_target)
+        lo, hi = sorted((N_now_fit, 0.0))
+        if not (lo <= N_target <= hi) or N_target == N_now_fit:
+            reasons.append(f"explicit N_target {N_target:+.2f} is not between the "
+                           f"current imbalance {N_now_fit:+.2f} and 0: refusing (would "
+                           f"not advance toward equilibrium)")
+    else:
+        N_target = N_now_fit * (1.0 - config.n_fraction)
+    x = _curve_step(a, b, c, N_target)
+    if x is None:
+        x0 = (N_target - a) / b
+        if gate_refusal(f"the local curve turns over before N reaches {N_target:+.2f} "
+                        f"(the feedback weakens toward zero ahead): using the tangent"):
+            reasons.append(f"the local curve turns over before N reaches "
+                           f"{N_target:+.2f} W/m2: the feedback weakens toward zero "
+                           f"ahead of the current state — a probe can map it")
+        x = x0
+    reach = config.local_max_extrapolation * f["TS_range"]
+    if abs(x) > reach:
+        warnings.append(f"TS step {x:+.2f} K limited to {np.sign(x) * reach:+.2f} K "
+                        f"({config.local_max_extrapolation:g}x the {f['TS_range']:.2f} K "
+                        f"the window sampled)")
+        x = float(np.sign(x) * reach)
+
+    gap = _gap(columns, "native", m)
+    C_eff = tau = None
+    ok = np.isfinite(N_nat[m]) & np.isfinite(TS_nat[m])
+    if ok.sum() >= 3:
+        Nk = N_nat[m][ok]
+        E = np.cumsum(Nk) - 0.5 * Nk
+        C = float(np.polyfit(TS_nat[m][ok], E, 1)[0])
+        if C > 0:
+            C_eff = C
+            tau = C_eff / alpha
+    heat = measure_heat_ratio(columns, m, config.heat_ratio, config.max_heat_ratio)
+    heat["window"] = float(W)
+    hr = heat["used"]
+    if config.heat_ratio is None and not heat["measured"]:
+        warnings.append(f"ocean heat fraction not measured ({heat['reason']}): somtp "
+                        f"moves by the TS change alone and the run will land short")
+
+    dTS = dT = raw = TS_after = N_after = skipped = None
+    clipped = False
+    if not reasons:
+        dTS = float(x)
+        raw = dTS * hr
+        dT = float(np.clip(raw, -config.max_dT, config.max_dT))
+        clipped = dT != raw
+        if clipped:
+            warnings.append(f"somtp increment {raw:+.2f} K clipped to {dT:+.2f} K")
+        if abs(dT / hr) < min_move:
+            reasons.append(f"the jump would move TS by only {dT / hr:+.2f} K (< "
+                           f"{min_move:.2f} K: the larger of {config.min_dT:g} and the "
+                           f"interannual TS scatter): not worth a restart edit — near "
+                           f"equilibrium")
+            dT = raw = None
+            clipped = False
+        else:
+            xl = dT / hr
+            TS_after = TS_now + xl
+            N_after = float(a + b * xl + c * xl * xl)
+            if tau is not None and N_now_fit * N_after > 0 and abs(N_after) < abs(N_now_fit):
+                skipped = float(tau * np.log(N_now_fit / N_after))
+    return result(N_now_fit, N_target, W, None, gap,
+                  dTS if dT is not None else None, dT, raw, clipped, TS_after, N_after,
+                  C_eff, tau, skipped, heat, local)
+
+
 def pattern_advice(advice: dict, summary: dict) -> dict:
     """Mark an ocean advice (``OceanAdvice.to_dict()``) as a patterned jump.
 
@@ -668,7 +945,10 @@ class ProbeConfig:
     heat_windows: Tuple[float, ...] = (40.0, 30.0, 20.0, 10.0)
     #: years averaged for the pre-probe point and in the lambda estimate
     recent_years: int = 5
-    imbalance: str = "energy_bot"
+    imbalance: str = "energy_top"
+    #: size an automatic probe even when the time-domain gate refuses (the
+    #: refusal is recorded as a warning in the advice)
+    override_gate: bool = False
     max_icefrac: float = 0.001
     spinup_years: int = 5
     since_year: Optional[int] = None
@@ -778,10 +1058,15 @@ def probe_ocean(columns: Dict[str, np.ndarray], case: str,
             if not step.accepted:
                 warnings.append("the trend gate would have refused an automatic probe: "
                                 + "; ".join(step.gate.reasons))
-        elif not step.accepted:
+        elif not step.accepted and not config.override_gate:
             reasons.extend(step.gate.reasons)
         else:
-            raw = float(step.tendency * config.probe_years * hr)
+            if not step.accepted:
+                warnings.extend(f"gate overridden: {r}" for r in step.gate.reasons)
+                out["gate_overridden"] = list(step.gate.reasons)
+            tendency = (step.tendency if step.accepted
+                        else float(np.polyfit(t[w], T[w], 1)[0]))
+            raw = float(tendency * config.probe_years * hr)
             dT = float(np.clip(raw, -config.max_dT, config.max_dT))
             out["somtp_dT_raw"] = raw
             out["somtp_dT_clipped"] = dT != raw

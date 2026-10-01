@@ -92,3 +92,40 @@ class TestClip:
     def test_nonpositive_limit_raises(self):
         with pytest.raises(ValueError):
             clip_step(np.array([1.0]), 0.0)
+
+
+def test_decelerating_curvature_passes_accelerating_refuses():
+    import numpy as np
+    from exocam_accelerate.safeguards import GateConfig, assess_trustworthiness
+    from exocam_accelerate.trends import TrendSeries
+    t = np.arange(20.0)
+    decel = 350.0 - 20.0 * np.exp(-t / 8.0)          # approach to equilibrium
+    accel = 300.0 + 0.02 * t ** 3                     # speeding up
+    assert assess_trustworthiness(TrendSeries(t, decel)).ok
+    old_rule = assess_trustworthiness(TrendSeries(t, decel),
+                                      GateConfig(allow_decelerating=False))
+    assert not old_rule.ok
+    r = assess_trustworthiness(TrendSeries(t, accel))
+    assert not r.ok and any("accelerating" in x for x in r.reasons)
+
+
+def test_sign_flip_inside_noise_is_not_a_refusal():
+    import numpy as np
+    from exocam_accelerate.safeguards import GateConfig, assess_trustworthiness
+    from exocam_accelerate.trends import TrendSeries
+    rng = np.random.default_rng(3)
+    t = np.arange(20.0)
+    noisy = 350.0 + 0.05 * t + 1.0 * rng.standard_normal(t.size)   # slow, noisy rise
+    flips = [s for s in range(50)
+             if not assess_trustworthiness(
+                 TrendSeries(t, 350.0 + 0.05 * t + np.random.default_rng(s).standard_normal(20)),
+                 GateConfig(allow_decelerating=True, max_curvature_ratio=1e9)).sign_stable.all()]
+    old = [s for s in range(50)
+           if not assess_trustworthiness(
+               TrendSeries(t, 350.0 + 0.05 * t + np.random.default_rng(s).standard_normal(20)),
+               GateConfig(sign_flip_sigmas=0.0, max_curvature_ratio=1e9)).sign_stable.all()]
+    assert len(flips) <= 3 < len(old)
+    # a real reversal (up then significantly down) still refuses
+    rev = np.r_[np.linspace(300, 310, 10), np.linspace(310, 300, 10)]
+    assert not assess_trustworthiness(TrendSeries(t, rev),
+                                      GateConfig(max_curvature_ratio=1e9)).sign_stable.all()

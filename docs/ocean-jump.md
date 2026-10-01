@@ -273,6 +273,69 @@ Synthetic D2-like probes (400 realisations, τ 25 yr): false FAIL 1.8–2.2 % �
 years: PASS 18 % / 43 % / 57 % / 96 % at 5 / 8 / 10 / 13. A true TS runaway
 still FAILs in 34 % of runs at 5 settled years and 98 % at 8.
 
+## The local curve: alpha_diff instead of a line (decided 2026-10-01)
+
+The user, from Wolf et al. (2018, JGR-A): the Gregory "line" need not be a
+line — for hot planets the feedback parameter is itself a function of
+temperature, with distinct regimes (a destabilizing cloud feedback through
+the 310–330 K temperate-to-moist-greenhouse transition, re-stabilization at
+340–380 K from the cloud-albedo rebound and Rayleigh scattering). Gregory et
+al. (2004) prescribe the *differential* feedback parameter α_diff = dN/dΔTs,
+the local tangent. And curvature in a trajectory (noisy, asymptotic
+approaches) is common; sometimes we want to jump anyway.
+
+**Advisor (`fit="local"`, default).** N(TS) is fitted as a quadratic about
+the current state, `N = a + b x + c x²`, x = TS − TS_now, on native annual
+means (independent years, so the standard errors mean something; a running
+mean is serially correlated), over the longest window (40/30/20/10 yr) with
+≥ 8 years and ≥ 0.5 K of TS range. α_diff = −b must be > 0 (a restoring
+feedback; otherwise refused outright) and resolved at 2σ (else refused — a
+probe resolves it). The curvature c is used only when resolved at 2σ, else
+the tangent. The jump solves `a + b x + c x² = N_target` on the branch the
+tangent points to; if the curve turns over first (the feedback weakens to
+zero ahead), it refuses. The TS step is limited to 3× the TS range the window
+sampled. `check` scores a local-curve jump against the same curve
+(`ocean_advise.reference_curve`).
+
+**Coordinate: energy_top by default** (the user's priority; also the paper's).
+On the TOA curve α_diff is ~1/f_ocean times the surface one during the
+transient (the atmosphere's storage), but both curves reach N = 0 at the same
+TS.
+
+**Override.** `--override-gate` turns the overridable refusals (α_diff not
+resolved, state off the curve, curve turning over → tangent, the probe's
+time-domain gate) into warnings recorded in the advice (`gate_overridden`).
+No restoring feedback at all (α_diff ≤ 0), ice, and missing data still
+refuse.
+
+**Time-domain gate (`safeguards.GateConfig`).** Curvature that *opposes* the
+trend (a decelerating, asymptotic approach) now passes; only *accelerating*
+curvature refuses. A sub-window's slope counts against sign stability only
+if it is significantly (2σ) of the other sign. The old rules are
+`allow_decelerating=False`, `sign_flip_sigmas=0`. Caveat (unit test): a
+forward-Euler step over a decelerating window overshoots (an exponential
+spin-up hindcast: error +10 K vs −8 K for no step) — fine for a probe, which
+is a perturbation, not a landing.
+
+**Tests.** 3-bar CO₂ run (equilibrium 375.1 K), truncated at year Y:
+
+| | first advice | TS_eq error | jumps overshooting TS_eq |
+|---|---|---|---|
+| line, energy_bot | Y12 | +2.1 (Y12) → ±0.4 (Y16+) | none |
+| line, energy_top | Y28 | +0.2–0.4 | none |
+| local, energy_top | Y10 | +1.1/+0.2/−1.2 (Y10–14) → mostly ±0.5 (Y16+) | none (≤ +0.1 K) |
+| local, energy_bot | Y10 | −1.2…+1.6 | +0.3–0.5 K at Y26–30 |
+
+D runs truncated, scored against the final 10-yr mean (all still warming, so
+the true equilibria are somewhat higher): D3 local/energy_top TS_eq within
+±0.4 K from year 20, every jump short of the final state; D1 −1.5…−0.4 K
+from year 25 (year 20 correctly refused: α_diff 0.20 ± 0.14); D2 noisy,
+−3 to −4 K (consistent with α_diff falling as it warms), jumps conservative.
+energy_bot is ~3× noisier and mostly "not resolved". Current advice
+(local, energy_top): D4 TS 369.1 → 371.9 (somtp +7.5 K, TS_eq ~374.6),
+D5 374.9 → 377.8 (somtp +9.0 K, TS_eq ~380.8), D2 unresolved (α_diff
+0.65 ± 1.15 — the probe was the right tool), D1/D3 near equilibrium.
+
 ## Post-jump check (`check`, som_ocean logs)
 
 - landed: first post-jump annual TS moved by the expected

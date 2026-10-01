@@ -137,7 +137,8 @@ class TestHindcastAt:
         ann = annual_mean_series(monthly_exp_spinup(n_years=60, tau=15.0))
         r = hindcast_at(ann, origin_year=8.5, window_years=6.0,
                         dt_years=20.0, variable="TS", max_abs_step=50.0,
-                        gate_config=GateConfig(max_curvature_ratio=0.05))
+                        gate_config=GateConfig(max_curvature_ratio=0.05,
+                                               allow_decelerating=False))
         assert r is not None
         assert not r.accepted
         assert r.predicted is None and np.isnan(r.error)

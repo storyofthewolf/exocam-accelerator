@@ -314,11 +314,43 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
         hi_t = float(np.nanmax(Nall[-60:])) + 0.5
         ngt = np.linspace(min(lo_t, -0.5), hi_t, 40)
         for r in advice.get("windows_tried") or []:
-            tried.append(dict(r, curve={"N": ngt, "TS": r["c0"] + r["c1"] * ngt}))
+            if "c0" in r and "c1" in r:
+                tried.append(dict(r, curve={"N": ngt, "TS": r["c0"] + r["c1"] * ngt}))
 
     greg = None
     lin = (advice.get("gregory") or {}).get("fits", {}).get("linear")
-    if lin:
+    loc = advice.get("local")
+    if loc:
+        # the local curve, drawn over the TS the window sampled and on toward
+        # the equilibrium; c0/c1 = the tangent at the current state (for tiles)
+        from .ocean_advise import reference_curve
+        N_of, TS_eq = reference_curve(advice)
+        T = np.asarray(series["TS"]["native"], dtype=float)
+        Tw = T[w] if w.any() else T
+        ends = [x for x in (adv.TS_after, TS_eq) if x is not None and np.isfinite(x)]
+        lo = float(np.nanmin(np.r_[Tw, ends])) - 0.5
+        hi = float(np.nanmax(np.r_[Tw, ends])) + 0.5
+        tg = np.linspace(lo, hi, 80)
+        alpha = loc["alpha_diff"]
+        c0 = TS_eq if TS_eq is not None else adv.TS_now + loc["a"] / alpha
+        greg = {"c0": c0, "c1": -1.0 / alpha, "corr": None, "local": True,
+                "alpha_diff": alpha, "alpha_diff_se": loc["alpha_diff_se"],
+                "accepted": adv.jump or not adv.reasons,
+                "curve": {"N": N_of(tg), "TS": tg},
+                "now": {"N": adv.N_now_fit, "TS": adv.TS_now},
+                "target": ({"N": adv.N_target, "TS": adv.TS_now + (adv.dTS_target or 0.0)}
+                           if adv.dTS_target is not None else None),
+                "after": ({"N": adv.N_after, "TS": adv.TS_after} if adv.jump else None),
+                "eq": {"N": 0.0, "TS": c0}}
+        if adv.tau_years:
+            span = max(30.0, 3.0 * adv.tau_years)
+            dt = np.linspace(0.0, span, 120)
+            proj = {"year": int(years[-1]) + 0.5 + dt, "tau": adv.tau_years,
+                    "TS": c0 - (c0 - adv.TS_now) * np.exp(-dt / adv.tau_years)}
+            if adv.jump:
+                proj["TS_jumped"] = c0 - (c0 - adv.TS_after) * np.exp(-dt / adv.tau_years)
+            greg["projection"] = proj
+    elif lin:
         c0, c1 = lin["params"]
         N = np.asarray(series[config.imbalance]["native"])
         pts = [x for x in (adv.N_now_fit, adv.N_target, adv.N_after, 0.0)
@@ -374,6 +406,8 @@ def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1
             entry["advice"]["line"] = la["gregory"]["fits"]["linear"]["params"]
         except (KeyError, TypeError):
             pass
+        if la.get("local"):
+            entry["advice"]["local"] = la["local"]
         try:
             res = check_any(columns, log, start_year)
             entry["check"] = {"verdict": res.verdict.name, "reasons": list(res.reasons),
@@ -495,6 +529,11 @@ def ocean_config_from_query(q: Dict[str, List[str]]) -> OceanAdvisorConfig:
     which = q.get("which", [""])[0]
     if which in ("native", "int1", "int2"):
         kw["which"] = which
+    fit = q.get("fit", [""])[0]
+    if fit in ("local", "line"):
+        kw["fit"] = fit
+    if q.get("override_gate", [""])[0] in ("1", "true"):
+        kw["override_gate"] = True
     imb = q.get("imbalance", [""])[0]
     if imb in ("energy_bot", "energy_top"):
         kw["imbalance"] = imb
@@ -514,7 +553,8 @@ def any_payload(cols, case, start_year, q, logs, maps=None, profiles=None) -> di
         if q.get("probe", [""])[0] in ("1", "true"):
             pr = ProbeConfig(probe_years=_num(q, "probe_years") or 15.0,
                              probe_dT=_num(q, "probe_dT"), max_dT=oc.max_dT,
-                             imbalance=oc.imbalance, heat_ratio=oc.heat_ratio)
+                             imbalance=oc.imbalance, heat_ratio=oc.heat_ratio,
+                             override_gate=oc.override_gate)
         return ocean_payload(cols, case, start_year, oc, logs, maps, pr, profiles)
     p = case_payload(cols, case, start_year, config_from_query(q), logs)
     p["regime"] = "ice"

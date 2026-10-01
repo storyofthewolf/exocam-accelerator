@@ -152,7 +152,13 @@ body.ocean .ice-only, body:not(.ocean) .ocean-only { display: none; }
     </div>
     <div class="ctl ocean-only">
       <label>phase-space coordinate</label>
-      <select id="imb"><option value="energy_bot">energy_bot (surface — slab equilibrium)</option><option value="energy_top">energy_top (TOA — includes atmospheric storage)</option></select>
+      <select id="imb"><option value="energy_top">energy_top (TOA — planetary balance)</option><option value="energy_bot">energy_bot (surface — slab equilibrium)</option></select>
+    </div>
+    <div class="ctl ocean-only">
+      <label>Gregory fit</label>
+      <select id="fit"><option value="local">local curve (α_diff at the current state)</option><option value="line">single line per window</option></select>
+      <label><span><input type="checkbox" id="ovr"> override the safeguards</span></label>
+      <div class="hint">Overridden refusals become warnings recorded in the advice.</div>
     </div>
     <div class="ctl">
       <label>fit window · column</label>
@@ -195,6 +201,8 @@ function params() {
   // the slider is the ocean heat fraction; the advisor takes its inverse
   if (!$('#hr_auto').checked) p.set('heat_ratio', (1 / Number($('#hr').value)).toFixed(4));
   p.set('imbalance', $('#imb').value);
+  p.set('fit', $('#fit').value);
+  if ($('#ovr').checked) p.set('override_gate', '1');
   if ($('#probe').checked || $('#pdt').value) { p.set('probe', '1'); p.set('probe_years', $('#py').value); }
   if ($('#pdt').value) p.set('probe_dT', $('#pdt').value);
   if ($('#win').value !== 'auto') p.set('window_years', $('#win').value);
@@ -732,7 +740,7 @@ function renderOcean(d) {
       ${imbalanceTiles(d, a.N_now_fit !== null ? `on the line ${sgn(a.N_now_fit)} W/m²` : null)}
       <div class="tile"><div class="k">${coord} target → after</div><div class="v">${sgn(a.N_target)}</div><div class="s">after jump ${sgn(a.N_after)} W/m²</div></div>
       <div class="tile"><div class="k">TS</div><div class="v">${fmt(a.TS_now, 1)}${a.TS_after ? ' → ' + fmt(a.TS_after, 1) : ''}</div><div class="s">K, global mean</div></div>
-      <div class="tile"><div class="k">TS at equilibrium</div><div class="v">${G ? fmt(G.c0, 1) : '–'}</div><div class="s">${G ? `line: TS = ${fmt(G.c0, 1)} ${sgn(G.c1, 2)}·N, r ${fmt(G.corr, 3)}` : 'no trusted line'}</div></div>
+      <div class="tile"><div class="k">TS at equilibrium</div><div class="v">${G ? fmt(G.c0, 1) : '–'}</div><div class="s">${!G ? 'no trusted relation' : G.local ? `local curve: α<sub>diff</sub> ${fmt(G.alpha_diff, 2)} ± ${fmt(G.alpha_diff_se, 2)} W/m²/K` : `line: TS = ${fmt(G.c0, 1)} ${sgn(G.c1, 2)}·N, r ${fmt(G.corr, 3)}`}</div></div>
       <div class="tile"><div class="k">years skipped</div><div class="v">${a.years_skipped ? '~' + fmt(a.years_skipped, 0) : '–'}</div><div class="s">τ ${a.tau_years ? fmt(a.tau_years, 1) + ' yr' : '–'} (one box)</div></div>
       <div class="tile"><div class="k">heat capacity</div><div class="v">${a.C_eff_m_seawater ? '~' + fmt(a.C_eff_m_seawater, 0) + ' m' : '–'}</div><div class="s">of sea water, from ∑N vs TS</div></div>
       <div class="tile"><div class="k">ocean heat fraction</div><div class="v">${a.heat && a.heat.ratio ? fmt(1 / a.heat.ratio, 2) : '–'}</div><div class="s">C<sub>ocean</sub>/C<sub>total</sub>${a.heat && a.heat.C_total ? ` = ${fmt(a.heat.C_ocean, 1)}/${fmt(a.heat.C_total, 1)}` : ''}; somtp step = TS step ÷ this. TOA − surface ${a.gap && a.gap.mean !== null ? sgn(a.gap.mean, 1) : '–'} W/m²</div></div>
@@ -1026,7 +1034,7 @@ function changed() {
 }
 ['#nf', '#mf', '#mdt', '#hr', '#py'].forEach(s => $(s).addEventListener('input', changed));
 $('#hr_auto').addEventListener('change', changed);
-['#win', '#which', '#nt', '#since', '#imb', '#probe', '#pdt'].forEach(s => $(s).addEventListener('change', changed));
+['#win', '#which', '#nt', '#since', '#imb', '#fit', '#ovr', '#probe', '#pdt'].forEach(s => $(s).addEventListener('change', changed));
 $('#reset').onclick = () => { for (const [k, v] of Object.entries(DEFAULTS)) $('#' + k).value = v; $('#probe').checked = false; changed(); };
 $('#theme').onclick = () => {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches;

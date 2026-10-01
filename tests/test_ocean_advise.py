@@ -7,10 +7,13 @@ from exocam_accelerate.ocean_advise import (OCEAN_ADVICE_SCHEMA_VERSION,
                                             detect_ts_jumps, pattern_advice)
 
 C0, C1, TAU = 350.0, -1.2, 12.0
+#: the original single-line Gregory fit on the surface imbalance
+LINE = OceanAdvisorConfig(fit="line", imbalance="energy_bot")
+BOT = OceanAdvisorConfig(imbalance="energy_bot")
 
 
 def test_recovers_gregory_line_and_target():
-    a = advise_ocean(truncate(gregory_columns(), 30), "synth")
+    a = advise_ocean(truncate(gregory_columns(), 30), "synth", LINE)
     assert a.jump, a.reasons
     c0, c1 = a.gregory.fits["linear"].params
     assert c0 == pytest.approx(C0, abs=1e-6)
@@ -29,16 +32,27 @@ def test_heat_capacity_and_years_skipped_are_one_box_exact():
     assert a.years_skipped == pytest.approx(TAU * np.log(2), rel=0.02)
 
 
-def test_default_coordinate_is_energy_bot_and_gap_reported():
+def test_line_fit_on_energy_bot_and_gap_reported():
     # atmospheric storage: energy_top = energy_bot + C_atm dTS/dt
     cols = truncate(gregory_columns(c_atm=20.0), 30)
-    a = advise_ocean(cols, "synth")
-    assert a.config.imbalance == "energy_bot"
+    a = advise_ocean(cols, "synth", LINE)
     assert a.gap["mean"] > 0
     # the equilibrium from the surface line is exact; the TOA line is bent
     assert a.gregory.fits["linear"].params[0] == pytest.approx(C0, abs=1e-6)
-    top = advise_ocean(cols, "synth", OceanAdvisorConfig(imbalance="energy_top"))
+    top = advise_ocean(cols, "synth", OceanAdvisorConfig(fit="line", imbalance="energy_top"))
     assert any("storage" in w for w in top.warnings) or not top.jump
+
+
+def test_default_is_local_curve_on_energy_top():
+    a = advise_ocean(truncate(gregory_columns(c_atm=20.0), 30), "synth")
+    assert a.config.fit == "local" and a.config.imbalance == "energy_top"
+    assert a.local is not None and a.gregory is None
+    # storage scales the TOA imbalance by C_total/C_ocean, so the TOA curve's
+    # alpha_diff is ~3x the surface one, and both point at the same equilibrium
+    bot = advise_ocean(truncate(gregory_columns(c_atm=20.0), 30), "synth", BOT)
+    assert a.local["alpha_diff"] == pytest.approx(3 * bot.local["alpha_diff"], rel=0.1)
+    assert a.local["TS_eq_curve"] == pytest.approx(C0, abs=0.5)
+    assert bot.local["TS_eq_curve"] == pytest.approx(C0, abs=0.1)
 
 
 def test_heat_ratio_measured_from_storage():
@@ -92,7 +106,7 @@ def test_refuses_runaway_like_relation():
     cols = truncate(gregory_columns(), 30)
     for w in ("native", "int1", "int2"):   # N grows with TS: no equilibrium
         cols[f"energy_bot_{w}"] = -cols[f"energy_bot_{w}"]
-    a = advise_ocean(cols, "synth")
+    a = advise_ocean(cols, "synth", BOT)
     assert not a.jump
 
 
@@ -103,15 +117,19 @@ def test_refuses_when_current_state_is_off_the_line():
     for w in ("native", "int1", "int2"):
         cols[f"energy_bot_{w}"] = np.where(late, cols[f"energy_bot_{w}"] + 3.0,
                                            cols[f"energy_bot_{w}"])
-    a = advise_ocean(cols, "synth", OceanAdvisorConfig(window_years=30))
+    a = advise_ocean(cols, "synth", OceanAdvisorConfig(fit="line", imbalance="energy_bot",
+                                                       window_years=30))
     assert not a.jump
     assert any("off the line" in r for r in a.reasons)
 
 
 def test_near_equilibrium_not_worth_it():
-    a = advise_ocean(gregory_columns(years=120, noise=0.3), "synth")
+    a = advise_ocean(gregory_columns(years=120, noise=0.3), "synth", LINE)
     assert not a.jump
     assert any("not worth" in r for r in a.reasons)
+    # the local fit: TS has hardly moved over any window — nothing to fit
+    loc = advise_ocean(gregory_columns(years=120, noise=0.3), "synth")
+    assert not loc.jump and any("moved only" in r for r in loc.reasons)
 
 
 def test_nan_in_latest_year_refuses():
@@ -124,11 +142,14 @@ def test_nan_in_latest_year_refuses():
 
 def test_post_jump_fit_uses_native_after_since():
     cols = gregory_columns(years=60, tau=30.0, jump_year=31, dT=5.0)
-    a = advise_ocean(cols, "synth", OceanAdvisorConfig(since_year=31))
+    a = advise_ocean(cols, "synth", OceanAdvisorConfig(fit="line", imbalance="energy_bot",
+                                                       since_year=31))
     assert a.since_year == 31 and a.which_used == "native"
     assert a.jump, a.reasons
     assert a.gregory.fits["linear"].params[0] == pytest.approx(C0, abs=1e-6)
     few = advise_ocean(truncate(cols, 40), "synth", OceanAdvisorConfig(since_year=31))
+    loc = advise_ocean(cols, "synth", OceanAdvisorConfig(since_year=31))
+    assert loc.jump and loc.local["TS_eq_curve"] == pytest.approx(C0, abs=0.1)
     assert not few.jump and any("settled years" in r for r in few.reasons)
 
 
@@ -193,8 +214,8 @@ def test_n_now_is_five_year_mean_with_se_not_last_year():
     cols = truncate(gregory_columns(), 30)
     cols["energy_bot_native"] = cols["energy_bot_native"].copy()
     cols["energy_bot_native"][-12:] += 6.0           # last annual value spikes
-    a = advise_ocean(cols, "synth")
-    clean = advise_ocean(truncate(gregory_columns(), 30), "synth")
+    a = advise_ocean(cols, "synth", BOT)
+    clean = advise_ocean(truncate(gregory_columns(), 30), "synth", BOT)
     assert a.N_now_years == 5
     assert a.N_last_year == pytest.approx(clean.N_last_year + 6.0, abs=0.05)
     assert a.N_now == pytest.approx(clean.N_now + 6.0 / 5.0, abs=0.05)
@@ -224,3 +245,69 @@ def test_probe_measures_heat_ratio_over_longest_window():
     assert e["heat"]["used"] == 1.5
     assert e["config"]["heat_ratio"] == 1.5
     assert d["N_last_year"] is not None and "N_now_se" in d
+
+
+# ------------------------------------------------------------ local curve fit
+from exocam_accelerate.ocean_advise import _curve_step, fit_local_curve, reference_curve  # noqa: E402
+
+
+def test_curve_step_follows_the_branch_and_detects_turnover():
+    # N = 4 - 2x + 0.1x^2: restoring, weakening with x
+    assert _curve_step(4.0, -2.0, 0.0, 2.0) == pytest.approx(1.0)
+    x = _curve_step(4.0, -2.0, 0.1, 0.0)
+    assert 4.0 - 2.0 * x + 0.1 * x * x == pytest.approx(0.0, abs=1e-9) and 0 < x < 5
+    # strong weakening: the curve bottoms out above the target -> None
+    assert _curve_step(4.0, -2.0, 0.5, 0.0) is None
+
+
+def test_local_fit_recovers_state_dependent_feedback():
+    # N = alpha(T)*(Teq - T) with alpha falling as T rises (Wolf et al. 2018)
+    T = np.linspace(330.0, 345.0, 30)
+    N = (2.0 - 0.05 * (T - 330.0)) * (350.0 - T)
+    f = fit_local_curve(T, N, 345.0)
+    # dN/dT at 345: d/dT[(2-0.05(T-330))(350-T)] = -0.05(350-T) - (2-0.05*15)
+    assert -f["b"] == pytest.approx(0.05 * 5 + 1.25, rel=1e-6)
+    x = _curve_step(f["a"], f["b"], f["c"], 0.0)
+    assert 345.0 + x == pytest.approx(350.0, abs=1e-6)
+
+
+def test_unresolved_feedback_refuses_then_override_jumps():
+    # TS barely moving over the window and N with its own interannual noise:
+    # alpha_diff is not resolved
+    cols = truncate(gregory_columns(tau=80.0, T0=340.0), 30)
+    rng = np.random.default_rng(4)
+    noise = np.repeat(rng.normal(0.0, 3.0, 30), 12)
+    cols["energy_top_native"] = cols["energy_top_native"] + noise
+    a = advise_ocean(cols, "synth")
+    assert not a.jump and any("not resolved" in r for r in a.reasons), (a.reasons, a.local)
+    o = advise_ocean(cols, "synth", OceanAdvisorConfig(override_gate=True))
+    assert o.jump, o.reasons
+    assert o.overridden and any("gate overridden" in w for w in o.warnings)
+    d = o.to_dict()
+    assert d["gate_overridden"] and d["config"]["override_gate"] is True
+
+
+def test_reference_curve_for_both_fits():
+    adv = advise_ocean(truncate(gregory_columns(), 30), "synth").to_dict()
+    N_of, eq = reference_curve(adv)
+    assert eq == pytest.approx(C0, abs=0.1)
+    assert N_of(adv["TS_now"]) == pytest.approx(adv["N_now_fit"])
+    line = advise_ocean(truncate(gregory_columns(), 30), "synth", LINE).to_dict()
+    N_of, eq = reference_curve(line)
+    assert eq == pytest.approx(C0, abs=1e-6)
+    with pytest.raises(ValueError):
+        reference_curve({"TS_now": 300.0})
+
+
+def test_probe_override_sizes_a_refused_probe():
+    from exocam_accelerate.ocean_advise import ProbeConfig, probe_ocean
+    # TS accelerating: the time-domain gate refuses an automatic probe
+    cols = truncate(gregory_columns(), 40)
+    m = cols["month"] / 12.0
+    acc = np.where(m > 30, 0.08 * (m - 30) ** 2, 0.0)
+    cols["TS_native"] = cols["TS_native"] + acc
+    refused = probe_ocean(cols, "s", ProbeConfig())
+    assert refused["somtp_dT"] is None and any("accelerating" in r for r in refused["reasons"])
+    forced = probe_ocean(cols, "s", ProbeConfig(override_gate=True))
+    assert forced["somtp_dT"] is not None and forced["gate_overridden"]
+    assert any("gate overridden" in w for w in forced["warnings"])

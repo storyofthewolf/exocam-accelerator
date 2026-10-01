@@ -236,7 +236,7 @@ def cmd_advise_ocean(args) -> int:
     if args.probe or args.probe_dt is not None:
         pc = ProbeConfig(probe_years=args.probe_years, probe_dT=args.probe_dt,
                          max_dT=args.max_dt, imbalance=args.imbalance, since_year=since,
-                         heat_ratio=_heat_ratio(args))
+                         heat_ratio=_heat_ratio(args), override_gate=args.override_gate)
         d = probe_ocean(cols, args.case, pc, start_year=_start_year(args),
                         provenance=file_provenance(args.trend_dir, args.case))
         return _print_probe(d, args.json)
@@ -244,7 +244,8 @@ def cmd_advise_ocean(args) -> int:
     cfg = OceanAdvisorConfig(window_years=args.window, which=args.which,
                              imbalance=args.imbalance, n_fraction=args.n_fraction,
                              N_target=args.n_target, max_dT=args.max_dt,
-                             heat_ratio=_heat_ratio(args), gate=gate, since_year=since)
+                             heat_ratio=_heat_ratio(args), gate=gate, since_year=since,
+                             fit=args.fit, override_gate=args.override_gate)
     adv = advise_ocean(cols, args.case, cfg, start_year=_start_year(args),
                        provenance=file_provenance(args.trend_dir, args.case))
     d = adv.to_dict()
@@ -254,7 +255,19 @@ def cmd_advise_ocean(args) -> int:
     se_s = f" ± {adv.N_now_se:.2f}" if adv.N_now_se is not None else ""
     print(f"TS now {adv.TS_now:.2f} K   {cfg.imbalance} now {adv.N_now:+.2f}{se_s} W/m2 "
           f"(last {adv.N_now_years} yr mean; last year {adv.N_last_year:+.2f}; "
-          f"on the line {_fmt(adv.N_now_fit, 3)})   target {_fmt(adv.N_target, 3)}")
+          f"on the {'curve' if adv.local else 'line'} {_fmt(adv.N_now_fit, 3)})   "
+          f"target {_fmt(adv.N_target, 3)}")
+    L = adv.local
+    if L:
+        eq = L.get("TS_eq_curve")
+        eq_s = (f"{eq:.2f} K (curve)" if eq is not None
+                else f"{L['TS_eq_tangent']:.2f} K (tangent; the curve turns over first)")
+        print(f"local curve over the last {L['window']:g} yr ({L['n_years']} annual "
+              f"means): alpha_diff = -dN/dTS = {L['alpha_diff']:.2f} ± "
+              f"{L['alpha_diff_se']:.2f} W/m2/K at TS now; curvature "
+              + (f"{L['c_used']:+.3f} W/m2/K2" if L["curvature_resolved"]
+                 else f"not resolved ({L['c_fit']:+.3f} ± {L['c_se']:.3f}): tangent used")
+              + f"; TS at N=0: {eq_s}")
     g = adv.gregory
     if g is not None and "linear" in g.fits:
         c0, c1 = g.fits["linear"].params
@@ -849,7 +862,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="fit window, years (default: longest of 40/30/20/10 whose "
                         "TS(N) line passes the gate and the current state)")
     o.add_argument("--which", default="int2", choices=["native", "int1", "int2"])
-    o.add_argument("--imbalance", default="energy_bot",
+    o.add_argument("--fit", default="local", choices=["local", "line"],
+                   help="local: differential feedback alpha_diff = -dN/dTS at the "
+                        "current state, N(TS) a quadratic about it (default); line: "
+                        "one Gregory line per window (the original advisor)")
+    o.add_argument("--override-gate", action="store_true",
+                   help="jump even where a safeguard refuses (feedback not resolved, "
+                        "state off the curve, curve turning over, accelerating trend "
+                        "for a probe); each overridden refusal is recorded as a "
+                        "warning in the advice JSON")
+    o.add_argument("--imbalance", default="energy_top",
                    choices=["energy_bot", "energy_top"],
                    help="phase-space coordinate (energy_bot: the slab's own "
                         "equilibrium; energy_top includes atmospheric storage)")

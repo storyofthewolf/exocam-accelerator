@@ -22,9 +22,12 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   pointwise trends (Wordsworth's surface-ice case is pointwise), but the
   default pipeline is per-layer means.
 - **Trustworthiness gate before any step**: refuse — do not shrink — the step
-  when trend-window curvature is large or the tendency sign is unstable.
-  Large curvature means proximity to a nonlinear feedback threshold
-  (ice-albedo, runaway greenhouse) where linear extrapolation is invalid.
+  when trend-window curvature *accelerates* the trend or the tendency sign
+  *significantly* reverses (proximity to a nonlinear feedback threshold:
+  ice-albedo, runaway greenhouse). Decelerating (asymptotic) curvature passes
+  and sign flips inside the noise are noise (user, 2026-10-01). Ocean
+  advisor and probe: `--override-gate` turns overridable refusals into
+  recorded warnings — sometimes we want to jump these.
 - **Hard per-step magnitude clip**, configurable per variable (Turbet: 50 K).
 - **Decreasing Δt schedule** (Wordsworth: 5×100 yr then 15×10 yr).
 - Post-jump physical constraints are **per-variable plugins** (interface in
@@ -60,7 +63,12 @@ a bare multiplicative factor to restart fields with none of the safeguards).
 - **Hot, ice-free ocean jump (decided 2026-09-30; on main since 2026-10-01):**
   in-place edit of `docn.r` `somtp` (K, lon-fastest `gsize = ni*nj` on the
   docn domain named in `docn_ocn_in`), same backup/log/pre-flight/check/
-  rollback machinery, plain continuation. Phase-space coordinate is
+  rollback machinery, plain continuation. **Since 2026-10-01 the advisor
+  fits a local curve** — N(TS) quadratic about the current state on native
+  annual means, α_diff = −dN/dTS (Gregory 2004 differential feedback; the
+  feedback is a function of T for hot planets, Wolf et al. 2018) — on
+  **`energy_top`** by default (`--fit line`, `--imbalance energy_bot` keep the
+  originals; hindcasts in `docs/ocean-jump.md`). Originally the coordinate was
   **`energy_bot`** (the slab's own equilibrium): `energy_top − energy_bot` is
   heat stored by the atmosphere (vapor column; shown by an equilibrated 3-bar
   run where it closes to ~0), which bends a TOA Gregory line — NOT a leak (an
