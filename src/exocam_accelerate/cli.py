@@ -250,8 +250,10 @@ def cmd_advise_ocean(args) -> int:
                        provenance=file_provenance(args.trend_dir, args.case))
     d = adv.to_dict()
     since_s = f"   post-jump since year {adv.since_year}" if adv.since_year else ""
-    print(f"case {adv.case}   data through model year {adv.model_year}   fit "
-          f"{adv.which_used}, last {adv.window_years:g} yr{since_s}")
+    used = adv.local["which"] if adv.local else adv.which_used
+    print(f"case {adv.case}   data through model year {adv.model_year}   "
+          f"{'local curve' if cfg.fit == 'local' else 'line'} fit on {used} "
+          f"{cfg.imbalance}, last {adv.window_years:g} yr{since_s}")
     se_s = f" ± {adv.N_now_se:.2f}" if adv.N_now_se is not None else ""
     print(f"TS now {adv.TS_now:.2f} K   {cfg.imbalance} now {adv.N_now:+.2f}{se_s} W/m2 "
           f"(last {adv.N_now_years} yr mean; last year {adv.N_last_year:+.2f}; "
@@ -287,9 +289,10 @@ def cmd_advise_ocean(args) -> int:
               + ("" if h["used"] == h["ratio"] else
                  f"; used {h['ocean_fraction']:.2f} ({h['reason']})"))
     if d["C_eff_m_seawater"] is not None:
-        print(f"effective heat capacity {d['C_eff_W_yr_m2_K']:.2f} W yr/m2/K "
-              f"(~{d['C_eff_m_seawater']:.0f} m of sea water)   relaxation time "
-              f"~{_fmt(adv.tau_years, 3)} yr")
+        what = ("ocean + atmosphere" if cfg.imbalance == "energy_top" else "ocean")
+        print(f"effective heat capacity ({what}) {d['C_eff_W_yr_m2_K']:.2f} W yr/m2/K "
+              f"(~{d['C_eff_m_seawater']:.0f} m of sea water equivalent)   relaxation "
+              f"time ~{_fmt(adv.tau_years, 3)} yr")
     print()
     for w in adv.warnings:
         print(f"warning: {w}")
