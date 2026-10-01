@@ -47,3 +47,36 @@ def stefan_columns(years=100, a=A, b=B, h0=15.0, k=6.0, icefrac=0.8,
 
 def truncate(cols, years):
     return {k: v[: 12 * years] for k, v in cols.items()}
+
+
+def gregory_columns(years=60, c0=350.0, c1=-1.2, T0=300.0, tau=12.0, leak=0.0,
+                    c_atm=0.0, jump_year=None, dT=0.0, N_offset_after=0.0, noise=0.0,
+                    icefrac=0.0, seed=0):
+    """Monthly columns of a one-box ocean relaxing to c0 along TS = c0 + c1*N_bot.
+
+    energy_bot = (TS - c0)/c1 (so C_ocean = -tau/c1); energy_top = energy_bot
+    + ``c_atm`` dTS/dt (atmospheric heat storage) + ``leak``. With ``jump_year`` TS steps by ``dT`` at the
+    start of that model year and keeps relaxing; ``N_offset_after`` shifts
+    energy_bot off the line after the jump (a failed jump). int1 = int2 =
+    native here.
+    """
+    rng = np.random.default_rng(seed)
+    month = np.arange(1, 12 * years + 1, dtype=float)
+    t = month / 12.0
+    TS = c0 - (c0 - T0) * np.exp(-t / tau)
+    if jump_year is not None:
+        tj = jump_year - 1
+        Tj = c0 - (c0 - T0) * np.exp(-tj / tau) + dT
+        TS = np.where(t > tj, c0 - (c0 - Tj) * np.exp(-(t - tj) / tau), TS)
+    TS = TS + noise * rng.standard_normal(TS.size)
+    Nb = (TS - c0) / c1
+    if jump_year is not None:
+        Nb = np.where(t > jump_year - 1, Nb + N_offset_after, Nb)
+    Nt = Nb + c_atm * np.gradient(TS, t) + leak
+    series = {"TS": TS, "energy_bot": Nb, "energy_top": Nt,
+              "ICEFRAC": np.full_like(t, icefrac)}
+    cols = {"month": month}
+    for name, v in series.items():
+        for w in ("native", "int1", "int2"):
+            cols[f"{name}_{w}"] = v
+    return cols

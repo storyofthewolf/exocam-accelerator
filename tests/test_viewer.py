@@ -132,3 +132,18 @@ def test_server_routes(server):
     assert code == 404
     code, body = get(server + "/api/stamp")
     assert code == 200 and json.loads(body)["stamp"] > 0
+
+
+def test_ocean_regime_payload():
+    from synth import gregory_columns, truncate
+    from exocam_accelerate.viewer import any_payload, case_regime, case_summary
+    cols = truncate(gregory_columns(), 30)
+    assert case_regime(cols) == "ocean"
+    p = any_payload(cols, "hot", 1, {"n_fraction": ["0.5"]}, None, [])
+    assert p["regime"] == "ocean" and p["gregory"]["after"] is not None
+    assert p["gregory"]["projection"]["TS_jumped"] is not None
+    assert "gap" in p["series"] and p["tried"]
+    row = case_summary(p)
+    assert row["regime"] == "ocean" and row["somtp_dT"] > 0 and not row["refused"]
+    import json
+    json.dumps(p)                     # JSON-safe
