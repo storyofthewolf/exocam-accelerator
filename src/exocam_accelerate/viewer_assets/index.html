@@ -679,6 +679,19 @@ function plotAccel(d) {
 
 
 // ================================================================ ocean (som_ocean)
+function lastN(d, key, k = 5) {       // latest annual value and the mean of the last k years
+  const v = ((d.series[key] || {}).native || []).filter(Number.isFinite);
+  if (!v.length) return null;
+  const t = v.slice(-k);
+  return { now: v[v.length - 1], mean: t.reduce((a, b) => a + b, 0) / t.length, k: t.length };
+}
+function imbalanceTiles(d, fitNote) {  // N_surf and N_TOA now, side by side
+  const b = lastN(d, 'energy_bot'), t = lastN(d, 'energy_top');
+  const tile = (lab, x, sub) => x ? `<div class="tile"><div class="k">${lab} now</div><div class="v">${sgn(x.now)}</div><div class="s">${sub || `last ${x.k} yr mean ${sgn(x.mean)} W/m²`}</div></div>` : '';
+  return tile('N<sub>surf</sub>', b, d.imbalance === 'energy_bot' ? fitNote : null)
+       + tile('N<sub>TOA</sub>', t, d.imbalance === 'energy_top' ? fitNote : null);
+}
+
 function probeCard(d) {
   const P = d.probe, ok = P.somtp_dT !== null, lr = P.lambda_recent || {};
   const reasons = (P.reasons || []).map(r => `<li class="bad">${r}</li>`).join('');
@@ -691,7 +704,7 @@ function probeCard(d) {
     </div>
     <div class="tiles">
       <div class="tile"><div class="k">TS</div><div class="v">${fmt(P.TS_now, 1)}${ok ? ' → ' + fmt(P.TS_after, 1) : ''}</div><div class="s">trend ${sgn(P.trend_K_per_yr, 3)} K/yr</div></div>
-      <div class="tile"><div class="k">${d.imbalance} now</div><div class="v">${sgn(P.N_now)}</div><div class="s">last ${P.config.recent_years} yr, σ ${fmt(P.sigma_N)} W/m²</div></div>
+      ${imbalanceTiles(d, `last ${P.config.recent_years} yr mean ${sgn(P.N_now)}, σ ${fmt(P.sigma_N)} W/m²`)}
       <div class="tile"><div class="k">recent λ</div><div class="v">${lr.value !== undefined ? sgn(lr.value) : '–'}</div><div class="s">± ${fmt(lr.se)} W/m²/K (two ${P.config.recent_years}-yr periods)</div></div>
       <div class="tile"><div class="k">λ the probe resolves</div><div class="v">${ok ? '≥ ' + fmt(P.lambda_detectable) : '–'}</div><div class="s">after ${P.config.recent_years} settled years</div></div>
       <div class="tile"><div class="k">overshoots if λ &gt;</div><div class="v">${P.lambda_overshoot ? fmt(P.lambda_overshoot) : '–'}</div><div class="s">then the equilibrium is bracketed</div></div>
@@ -715,7 +728,7 @@ function renderOcean(d) {
         ${a.somtp_dT_clipped ? ` · clipped from ${sgn(a.somtp_dT_raw, 2)} K` : ''}</span>
     </div>
     <div class="tiles">
-      <div class="tile"><div class="k">${coord} now</div><div class="v">${sgn(a.N_now)}</div><div class="s">on the line ${sgn(a.N_now_fit)} W/m²</div></div>
+      ${imbalanceTiles(d, a.N_now_fit !== null ? `on the line ${sgn(a.N_now_fit)} W/m²` : null)}
       <div class="tile"><div class="k">${coord} target → after</div><div class="v">${sgn(a.N_target)}</div><div class="s">after jump ${sgn(a.N_after)} W/m²</div></div>
       <div class="tile"><div class="k">TS</div><div class="v">${fmt(a.TS_now, 1)}${a.TS_after ? ' → ' + fmt(a.TS_after, 1) : ''}</div><div class="s">K, global mean</div></div>
       <div class="tile"><div class="k">TS at equilibrium</div><div class="v">${G ? fmt(G.c0, 1) : '–'}</div><div class="s">${G ? `line: TS = ${fmt(G.c0, 1)} ${sgn(G.c1, 2)}·N, r ${fmt(G.corr, 3)}` : 'no trusted line'}</div></div>
