@@ -57,7 +57,7 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   `law_offset_after`), `restart.build_taper_mask`, `cli taper`; `check` scores
   against law + offset with the effective factor.
 
-- **Hot, ice-free ocean jump (decided 2026-09-30, branch `feature/ocean-jump`):**
+- **Hot, ice-free ocean jump (decided 2026-09-30; on main since 2026-10-01):**
   in-place edit of `docn.r` `somtp` (K, lon-fastest `gsize = ni*nj` on the
   docn domain named in `docn_ocn_in`), same backup/log/pre-flight/check/
   rollback machinery, plain continuation. Phase-space coordinate is
