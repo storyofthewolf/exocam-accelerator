@@ -733,10 +733,10 @@ def cmd_check(args) -> int:
     if "hi_first" in m:
         print(f"  landed: hi {m['hi_first']:.2f} m vs {m['hi_expected']:.2f} "
               f"expected ({m['land_error']:+.1%})")
-    if "dN" in m:
+    if "N_law" in m:
         print(f"  N: observed {m['N_obs']:+.2f}, conduction law {m['N_law']:+.2f} "
               f"(diff {m['dN']:+.2f}, tolerance {m['tol_N']:.2f}) W/m2")
-    if "dTS" in m:
+    if "tol_TS" in m:
         print(f"  TS: observed {m['TS_obs']:.2f} K (diff from Gregory relation "
               f"{m['dTS']:+.2f}, tolerance {m['tol_TS']:.2f})")
     if "hi_trend_m_per_yr" in m:
