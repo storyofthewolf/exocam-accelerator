@@ -291,3 +291,91 @@ orchestration (submitting and polling segments), land and atmosphere plugins
 are not implemented.
 
 **Use with care and caution — model behavior is not always straightforward.**
+
+## Glossary
+
+Plain-language definitions of the terms used above and in the CLI output. Sections of this README and `docs/` carry the detail; entries here only say what a word means.
+
+### Workflow and files
+
+- **jump**: one edit of a restart file that moves the model state a number of years ahead along its own trajectory toward equilibrium (`jump`). Followed by a short run to see whether the model agrees (`check`).
+- **advice / advisor**: `advise` (ice), `advise-ocean` (hot, ice-free) and `taper` read exocam-trend series and propose a jump (ice factor or somtp increment, the target, the model years skipped) or refuse with reasons. `--json` saves the advice, which `jump --advice` consumes; it carries a `schema_version` and the sha256 of its input series.
+- **continuation**: the restarted run is a plain continuation (no hybrid or branch reboot). The edited restart is read as if the model had written it, so nothing in the case setup changes.
+- **in place**: the restart file in the run directory is edited itself, after a pristine copy has been saved. No new file name enters `rpointer.*`.
+- **pristine backup (`.pre-accel.nc`) and jump log (`.accel.json`)**: copy of the unedited restart and the record of what was changed (factor or increment, restart date, the advice). Both live in `run/exocam_accelerate/`, not beside the restart, because `st_archive` sweeps `${CASE}.cice.r.*`.
+- **pre-flight**: the checks `jump` runs before editing (`--dry-run` stops after them): no queued or running job, `rpointer.*` consistent, no history past the restart, a verified rollback source, advice matching the case and recent.
+- **rollback / restore**: `rollback` resets the whole restart set (all components and rpointers) to the archived pre-jump set. `restore` puts back just the pristine file (`--ocean` for docn.r) before resubmitting.
+- **`cice.r`**: CICE sea-ice restart: ice volume (`vicen`), enthalpy (`eicen`), area (`aicen`) per category.
+- **`docn.r`**: data-ocean (slab) restart; holds `somtp`, the mixed-layer temperature in K on the docn grid (`gsize = ni*nj`, longitude fastest).
+- **`cam.r`**: CAM atmosphere restart: T, q, winds, `DELP`, `PS`, `TEOUT` and the previous-step fields.
+- **`cam.i`**: CAM initial-condition file written at the end of a year in the archive. Two of them, years apart, give the measured warming profile (`atm-profile`).
+
+### Energy balance
+
+- **`energy_top`** (N_TOA, TOA balance): net top-of-atmosphere flux. The convergence criterion, and the default imbalance for `advise-ocean` (`--imbalance`). N = 0 means equilibrium.
+- **`energy_bot`**: net flux into the slab ocean. About 3 times noisier year to year; kept for information and selectable with `--imbalance energy_bot`.
+- **TOA-surface gap** (`energy_top - energy_bot`): heat the atmosphere stores while it warms, mostly the latent heat of the water-vapor column. It is not a leak and closes at equilibrium (`docs/ocean-jump.md`).
+- **N now** (`N_now`, `N_now_se`, `N_last_year`): the imbalance now, as the mean of the last 5 native annual values with its standard error. `N_last_year` is the single latest year, which can swing by several W/m2.
+- **`N_target`, `n_fraction`**: the imbalance the jump aims for, by default `N_now*(1 - n_fraction)` with `--n-fraction 0.5`, or an explicit `--n-target`.
+
+### Heat capacity
+
+- **C_ocean, C_atm, C_total**: heat taken up per K of surface warming, in W yr m-2 K-1: the slab's, the atmosphere's (in hot cases mostly vapor latent heat, rising steeply with T), and their sum. Measured from N against TS over the fit window.
+- **ocean heat fraction** (`f_ocean = C_ocean/C_total`; `--ocean-fraction`, JSON `heat.ocean_fraction`): the share of a TS change's heat the slab holds. The somtp step is the TS step divided by `f_ocean`. The **atmosphere heat fraction** is `1 - f_ocean` (`heat.atm_fraction`).
+- **heat ratio** (`heat_ratio`, `--heat-ratio`): the old name, `1/f_ocean`. Still written to the JSON and still accepted as a hidden flag; `check` reports `heat_ratio_implied`.
+- **effective heat capacity** (`C_eff = N / (dTS/dt)`): what the run actually shows over the window, also given as metres of sea water for comparison with `hblt`.
+- **relaxation time** (`tau = C/alpha`): e-folding time of the imbalance in the one-box model, `C dTS/dt = N`, `N = alpha (TS_eq - TS)`.
+- **years skipped**: model years the jump saves, `tau * ln(N_now/N_after)` for the ocean jump (Stefan growth for the ice jump).
+
+### Phase space and feedback
+
+- **Gregory analysis / phase space**: plot N against TS (or ice thickness). The state moves along a curve toward N = 0, and a jump moves it along that curve instead of waiting. The viewer draws N on y, T on x.
+- **feedback parameter** (`lambda`, `alpha`): `-dN/dTS`, in W/m2/K. Positive means restoring.
+- **differential feedback parameter** (`alpha_diff = -dN/dTS` at the current state; Gregory et al. 2004): the local slope of N(TS). For hot planets the feedback depends on T and changes regime (Wolf et al. 2018, JGR-A), so one line over the whole history misleads.
+- **local curve** (`--fit local`, default): a quadratic N(TS) about the current state on native annual means. Curvature is used only when resolved at 2 sigma, otherwise the tangent. Refuses if `alpha_diff <= 0` or not resolved at 2 sigma, or if the curve turns over before N reaches the target.
+- **line** (`--fit line`): the original single Gregory line `TS = c0 + c1*N` per window. Checked by "on the line": the current state must lie within `max_offline` of it.
+- **equilibrium**: N = 0; TS there is `TS_eq`.
+
+### Trend data
+
+- **exocam-trend `data/*.txt`**: whitespace-separated monthly series per variable, read by `trend_io`. Each variable has `native`, `int1` and `int2` columns: the monthly values, a short running mean, a long running mean. `--which` picks one (default `int2`); the local fit uses native annual means so years are independent.
+
+### Safeguards
+
+- **trustworthiness gate** (time-domain): refuses a step when the trend window shows accelerating curvature (the drift is speeding up, near a threshold) or a significant sign reversal of the tendency (2 sigma). Decelerating curvature, the normal shape of convergence, passes.
+- **hard clip** (`--max-dt`, `--max-ice-factor`): absolute cap on the step, whatever the fit says.
+- **noise floor**: a jump smaller than the interannual TS scatter is refused as not worth an edit.
+- **extrapolation limit** (`--max-extrapolation-ratio`, 5): the target may not lie more than that multiple of the window's N-range beyond the data.
+- **`--override-gate`**: turns the overridable refusals (feedback unresolved, state off the curve, curve turning over, low correlation, the time-domain gate for a probe) into warnings recorded as `gate_overridden`. `alpha_diff <= 0`, sea ice present and missing data still refuse.
+
+### Probe and post-jump check
+
+- **probe** (`--probe`, `--probe-dt K`, `--probe-years`): a deliberate perturbation to measure the response, not sized to equilibrium. The step is the recent TS trend times `--probe-years` (default 15), or an explicit K.
+- **lever arm**: the TS difference between the probe's settled years and the years before it, which gives the response a baseline that the undisturbed run lacks.
+- **post-jump check** (`check`): verdict **PASS** (exit 0), **WAIT** (10, run more) or **FAIL** (20, roll back). For a probe FAIL is mechanical only: it did not land, or the data are non-finite.
+- **landed**: the first post-jump year moved by the amount the edit implies (`hi` for ice, TS for somtp). **Settle years** (default 2) are skipped after a jump, and PASS needs `min_years` settled years (3 by default; 5 for a probe).
+- **energy readout**: lambda and the implied equilibrium from settled post-probe N against the years before. Uses `energy_top`; `energy_bot` is reported for information only.
+- **TS-trajectory readout**: TS drift rate before versus after the probe gives `tau` and `TS_eq`. Much quieter than the energy readout on noisy runs.
+- **above / bracketed**: whether the equilibrium lies beyond the probe level (hotter still) or between the pre- and post-probe states (the probe overshot). Readouts that disagree give WAIT.
+- **runaway greenhouse suspected**: a warning when a warm probe is followed by no restoring response at 3 sigma (N grew, or the TS drift rose). Verdict WAIT with no rollback recommendation; the call is yours.
+- **implied ocean heat fraction**: what the first post-jump year says `f_ocean` was; use it for the next jump's `--ocean-fraction`.
+
+### Coupled atmosphere jump
+
+- **coupled jump** (`atm-profile`): edits `docn.r` and `cam.r` together, with the atmosphere following the ocean. `check` and `rollback` treat them as one jump.
+- **measured profile**: horizontal-mean warming per level between two archived `cam.i`, per K of surface warming. T is scaled by it.
+- **q at fixed RH**: humidity is raised with T so relative humidity is unchanged; warming T alone leaves the air undersaturated and the ocean re-evaporates.
+- **dry mass kept**: each layer's dry air mass is conserved, so adding vapor raises `PS`.
+- **`TEOUT`**: column energy at the end of the last physics step. It is recomputed because CAM's energy fixer would otherwise remove the jump on the first step.
+- **troposphere only**: nothing is changed at p < 100 hPa (`--ceiling`); the jump tapers linearly in log p from full strength at 200 hPa (`--taper-bottom`).
+
+### Ice jump
+
+- **ice factor**: one multiplier on `vicen` and `eicen`; `aicen` is untouched. Capped at 1.5 by `--max-ice-factor`, hard bound 2.
+- **Stefan law** (`N = a + b/hi`): growth limited by conduction, so the imbalance falls as ice thickens. The target N sets the jump size.
+- **tapered jump** (`taper`): the factor is applied per cell as `1 + (F-1)*weight`, with weight from the Stefan product `dh/dt*h` (ramp `--ramp 0.05 0.40`); partial-ice cells are not scaled.
+- **effective factor** (`effective_factor`): area-mean ice after over before, what the tapered jump amounts to globally. `check` scores against the law with it.
+
+### Pattern
+
+- **pattern** (`pattern`): per-cell somtp weights from the measured warming pattern (somtp from two archived `docn.r`), so the increment follows where the planet warms rather than being uniform. Area mean stays the sized increment; `--max-weight` limits any one cell.
