@@ -897,9 +897,6 @@ function plotPartition(d) {
   const all = pre.x.concat(pre.y).filter(Number.isFinite);
   const lo = Math.min(...all, 0), hi = Math.max(...all, 0);
   tr.push({ type: 'scatter', mode: 'lines', name: '1:1', x: [lo, hi], y: [lo, hi], line: { color: css('--axis'), width: 1.5, dash: 'dash' }, hoverinfo: 'skip' });
-  const L = d.advice.gap && d.advice.gap.mean;
-  if (L !== null && L !== undefined) tr.push({ type: 'scatter', mode: 'lines', name: `1:1 − window-mean gap (${sgn(L, 1)})`,
-    x: [lo, hi], y: [lo - L, hi - L], line: { color: css('--series-2'), width: 1.5, dash: 'dot' }, hoverinfo: 'skip' });
   const fx = [], fy = [];
   d.years.forEach((_, i) => { if (focus(d, i)) { fx.push(S.energy_top.native[i]); fy.push(S.energy_bot.native[i]); } });
   const xa = ax('energy_top, TOA (W/m²)'), ya = ax('energy_bot, into the slab (W/m²)');
