@@ -196,13 +196,16 @@ the flags say. Snow is left alone unless `--snow-factor` is given.
 For slab-ocean runs with no sea ice whose slow drift is the surface
 temperature (e.g. thick CO2 atmospheres at 340–375 K). The jump shifts the
 slab temperature `somtp` in `docn.r` (the file `rpointer.ocn` names), sized
-from a Gregory line `TS = c0 + c1·N` fitted against the **surface** imbalance
-`energy_bot`: that is the slab's own equilibrium condition, whereas
-`energy_top` also carries the heat the atmosphere stores while it warms —
-mostly the latent heat of the vapor column, 2–3× the ocean's heat capacity at
-365–375 K. The somtp increment is scaled by the measured heat ratio
-C_total/C_ocean so that TS lands on target after the atmosphere takes its
-share. Details and the evidence: `docs/ocean-jump.md`.
+from a **local curve** of the TOA imbalance `energy_top` against TS: a
+quadratic N(TS) about the current state whose slope there is the differential
+feedback parameter α_diff = −dN/dTS (the feedback is itself a function of
+temperature for hot planets; `--fit line` keeps the original single Gregory
+line, `--imbalance energy_bot` the surface coordinate). `energy_top` exceeds
+`energy_bot` by the heat the atmosphere stores while it warms — mostly the
+latent heat of the vapor column, 2–3× the ocean's heat capacity at 365–375 K —
+so the somtp increment is the TS step divided by the measured ocean heat
+fraction C_ocean/C_total, and TS lands on target after the atmosphere takes
+its share. Details and the evidence: `docs/ocean-jump.md`.
 
 ```
 exocam-accelerate advise-ocean TRENDDIR CASE --json adv.json   # --rundir RUN picks up a past jump
@@ -345,7 +348,7 @@ Plain-language definitions of the terms used above and in the CLI output. Sectio
 - **trustworthiness gate** (time-domain): refuses a step when the trend window shows accelerating curvature (the drift is speeding up, near a threshold) or a significant sign reversal of the tendency (2 sigma). Decelerating curvature, the normal shape of convergence, passes.
 - **hard clip** (`--max-dt`, `--max-ice-factor`): absolute cap on the step, whatever the fit says.
 - **noise floor**: a jump smaller than the interannual TS scatter is refused as not worth an edit.
-- **extrapolation limit** (`--max-extrapolation-ratio`, 5): the target may not lie more than that multiple of the window's N-range beyond the data.
+- **extrapolation limit**: the local fit limits the TS step to 3 times the TS range the window sampled; the line fit (`--max-extrapolation-ratio`, 5) limits the target to that multiple of the window's N-range beyond the data.
 - **`--override-gate`**: turns the overridable refusals (feedback unresolved, state off the curve, curve turning over, low correlation, the time-domain gate for a probe) into warnings recorded as `gate_overridden`. `alpha_diff <= 0`, sea ice present and missing data still refuse.
 
 ### Probe and post-jump check
