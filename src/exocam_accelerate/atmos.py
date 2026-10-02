@@ -32,10 +32,14 @@ cesm1.2.1; verified on atlasfu D4 0051):
   ``T_TTEND`` shift with T and q so the first step sees no spurious forcing;
 * ``U``, ``V`` and ``PHIS`` are unchanged.
 
-The increment's vertical shape is measured (``measured_profile``): the
-horizontal-mean warming per level between two archived cam.i, per K of
-surface warming (the per-layer horizontal-mean design this tool started
-from). It is applied from the surface up to where the measured warming first
+The increment's vertical shape is measured (``profile_from_annual``): the
+horizontal-mean warming per level per K of global-mean surface warming (the
+per-layer horizontal-mean design this tool started from), from time means —
+annual means of exocam-trend's per-level series (``--profile T``), never two
+instantaneous restarts, whose difference is mostly weather. ``trend`` (the
+default) fits each level and TS over the last ``window`` years and takes the
+ratio of the slopes; ``annual`` differences two annual means ``window`` years
+apart. It is applied from the surface up to where the measured warming first
 turns negative (the stratosphere cools; it holds negligible heat and adjusts
 radiatively), with a linear taper over ``taper_levels`` above that.
 """
@@ -224,10 +228,14 @@ class AtmProfile:
     dt_years: float
     top_index: int            # highest level (smallest index) with full weight
     config: ProfileConfig
+    method: str = "difference"
+    raw_gain_se: Optional[np.ndarray] = None   # (lev,) standard error ('trend' only)
+    years: Tuple[int, int] = (0, 0)            # first and last model year used
 
     def summary(self) -> dict:
         k0 = self.top_index
-        return {"dTS_baseline": self.dTS, "baseline_years": self.dt_years,
+        return {"method": self.method, "years": list(self.years),
+                "dTS_baseline": self.dTS, "baseline_years": self.dt_years,
                 "levels": int(self.gain.size), "top_level": int(k0),
                 "top_pressure_Pa": float(self.p_mid[k0]),
                 "gain_surface": float(self.gain[-1]),
@@ -245,8 +253,9 @@ def measured_profile(T_old, T_new, dTS: float, p_mid_now, dt_years: float,
                      config: ProfileConfig = ProfileConfig()) -> AtmProfile:
     """Gain per level from two horizontal-mean temperature profiles.
 
-    ``T_old``/``T_new`` are (lev,) area-weighted means at the two restarts,
-    ``dTS`` the area-mean surface (somtp) warming between them.
+    ``T_old``/``T_new`` are (lev,) area-weighted means at the two times —
+    time means (annual), not instantaneous states — ``dTS`` the global-mean
+    surface warming between them.
     """
     T_old = np.asarray(T_old, dtype=float)
     T_new = np.asarray(T_new, dtype=float)
@@ -255,11 +264,22 @@ def measured_profile(T_old, T_new, dTS: float, p_mid_now, dt_years: float,
         raise ValueError("profiles must be matching 1-D (lev,) arrays")
     if not (np.all(np.isfinite(T_old)) and np.all(np.isfinite(T_new))):
         raise ValueError("non-finite temperatures in the profiles")
+    _check_dTS(dTS, config)
+    return _shape_profile((T_new - T_old) / dTS, p, T_new, dTS, dt_years, config)
+
+
+def _check_dTS(dTS: float, config: ProfileConfig) -> None:
     if abs(dTS) < config.min_dTS:
-        raise ValueError(f"surface warmed only {dTS:+.2f} K between the restarts "
+        raise ValueError(f"surface warmed only {dTS:+.2f} K over the window "
                          f"(< {config.min_dTS:g}): the profile would be noise — use "
-                         f"restarts further apart")
-    raw = (T_new - T_old) / dTS
+                         f"a longer window")
+
+
+def _shape_profile(raw, p, T_now, dTS: float, dt_years: float, config: ProfileConfig,
+                   **extra) -> AtmProfile:
+    """Measured gain per level -> applied gain: smooth, find the top, clip,
+    taper above the top, troposphere-only ceiling."""
+    raw = np.asarray(raw, dtype=float)
     g = raw.copy()
     for _ in range(config.smooth):
         g = np.r_[g[0], (g[:-2] + 2 * g[1:-1] + g[2:]) / 4.0, g[-1]]
@@ -285,7 +305,77 @@ def measured_profile(T_old, T_new, dTS: float, p_mid_now, dt_years: float,
     g = g * wc
     full = np.where((wc >= 1.0) & (np.arange(n) >= k0))[0]
     k_full = int(full[0]) if full.size else n - 1
-    return AtmProfile(g, raw, p, T_new, float(dTS), float(dt_years), k_full, config)
+    return AtmProfile(g, raw, p, np.asarray(T_now, dtype=float), float(dTS),
+                      float(dt_years), k_full, config, **extra)
+
+
+PROFILE_METHODS = ("trend", "annual")
+
+
+def profile_from_annual(years_T, T_annual, years_TS, TS_annual, p_mid, end_year: int,
+                        window: int = 10, method: str = "trend",
+                        config: ProfileConfig = ProfileConfig()) -> AtmProfile:
+    """Measured profile from annual means of per-level T and global-mean TS.
+
+    ``years_T``/``T_annual`` (nyears, lev) and ``years_TS``/``TS_annual`` are
+    model-year-stamped annual means; ``p_mid`` (lev,) the mean level pressure.
+    The window ends at ``end_year`` (the last year before the restart):
+
+    * ``trend`` — least-squares slopes of each level and of TS over the last
+      ``window`` years; gain = slope_T / slope_TS, with a delta-method standard
+      error that includes the T-TS covariance;
+    * ``annual`` — difference of the annual means at ``end_year`` and
+      ``end_year - window``, divided by the TS difference.
+    """
+    if method not in PROFILE_METHODS:
+        raise ValueError(f"method must be one of {PROFILE_METHODS}, got {method!r}")
+    years_T = np.asarray(years_T, dtype=int)
+    years_TS = np.asarray(years_TS, dtype=int)
+    T_annual = np.asarray(T_annual, dtype=float)
+    TS_annual = np.asarray(TS_annual, dtype=float)
+    p = np.asarray(p_mid, dtype=float)
+    if T_annual.ndim != 2 or T_annual.shape != (years_T.size, p.size):
+        raise ValueError("T_annual must be (nyears, lev) matching years_T and p_mid")
+    if TS_annual.shape != years_TS.shape:
+        raise ValueError("TS_annual must match years_TS")
+    if window < (2 if method == "trend" else 1):
+        raise ValueError(f"window must be at least {2 if method == 'trend' else 1} years")
+    first = end_year - window + (1 if method == "trend" else 0)
+    want = np.arange(first, end_year + 1)
+    missing = sorted(set(want) - set(years_T.tolist()) | set(want) - set(years_TS.tolist()))
+    if missing:
+        raise ValueError(f"annual means missing for model years {missing[:5]}"
+                         f"{'...' if len(missing) > 5 else ''} (window {first}-{end_year})")
+    iT = np.array([np.where(years_T == y)[0][0] for y in want])
+    iS = np.array([np.where(years_TS == y)[0][0] for y in want])
+    T = T_annual[iT]
+    TS = TS_annual[iS]
+    if not (np.all(np.isfinite(T)) and np.all(np.isfinite(TS))):
+        raise ValueError("non-finite annual means in the window")
+    span = (int(first), int(end_year))
+    if method == "annual":
+        dTS = float(TS[-1] - TS[0])
+        _check_dTS(dTS, config)
+        return _shape_profile((T[-1] - T[0]) / dTS, p, T[-1], dTS, float(window), config,
+                              method="annual", years=span)
+    x = want - want.mean()
+    sxx = float((x * x).sum())
+    bT = (x[:, None] * (T - T.mean(0))).sum(0) / sxx
+    bS = float((x * (TS - TS.mean())).sum() / sxx)
+    rT = T - T.mean(0) - x[:, None] * bT
+    rS = TS - TS.mean() - x * bS
+    dof = want.size - 2
+    _check_dTS(bS * window, config)
+    raw = bT / bS
+    if dof > 0:
+        var_T = (rT * rT).sum(0) / dof / sxx
+        var_S = float((rS * rS).sum() / dof / sxx)
+        cov = (rT * rS[:, None]).sum(0) / dof / sxx
+        se = np.sqrt(np.maximum(var_T - 2 * raw * cov + raw * raw * var_S, 0.0)) / abs(bS)
+    else:
+        se = np.full(raw.shape, np.nan)
+    return _shape_profile(raw, p, T[-1], bS * window, float(window), config,
+                          method="trend", raw_gain_se=se, years=span)
 
 
 # ---------------------------------------------------------------------------

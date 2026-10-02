@@ -3,7 +3,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from exocam_accelerate.trend_io import file_provenance, load_case, read_trend_text, trend_series
+from exocam_accelerate.trend_io import (file_provenance, level_annual_means, load_case,
+                                       read_trend_text, trend_series)
 
 # Matches the documented exocam-trend data/*.txt format:
 # month  VAR_native  VAR_int1  VAR_int2 ... per variable
@@ -112,3 +113,35 @@ class TestFileProvenance:
 
     def test_no_files_is_empty(self, tmp_path):
         assert file_provenance(tmp_path, "nope") == {}
+
+
+def _write_lev(path, rows):
+    with open(path, "w") as f:
+        print("month  " + "  ".join(f"L{k + 1:02d}" for k in range(rows.shape[1])), file=f)
+        for i, r in enumerate(rows, 1):
+            print(f"{i}  " + "  ".join(f"{v:.7g}" for v in r), file=f)
+
+
+def test_level_annual_means(tmp_path):
+    rows = np.arange(30 * 2, dtype=float).reshape(30, 2)       # 2.5 years, 2 levels
+    _write_lev(tmp_path / "c_0041-01-0043-06_camlev_T.txt", rows)
+    years, means, path = level_annual_means(tmp_path, "c", "T")
+    assert list(years) == [41, 42]                             # the partial year is dropped
+    np.testing.assert_allclose(means, [rows[:12].mean(0), rows[12:24].mean(0)])
+    assert path.name == "c_0041-01-0043-06_camlev_T.txt"
+    # the 2D loaders do not pick the per-level files up
+    with pytest.raises(FileNotFoundError):
+        load_case(tmp_path, "c")
+
+
+def test_level_annual_means_refusals(tmp_path):
+    with pytest.raises(FileNotFoundError, match="--profile"):
+        level_annual_means(tmp_path, "c", "T")
+    rows = np.ones((24, 2))
+    _write_lev(tmp_path / "c_0001-01-0002-12_camlev_T.txt", rows)
+    _write_lev(tmp_path / "c_0001-01-0001-12_camlev_T.txt", rows[:12])
+    with pytest.raises(ValueError, match="keep one"):
+        level_annual_means(tmp_path, "c", "T")
+    _write_lev(tmp_path / "c_0001-03-0002-02_camlev_Q.txt", rows)
+    with pytest.raises(ValueError, match="January"):
+        level_annual_means(tmp_path, "c", "Q")

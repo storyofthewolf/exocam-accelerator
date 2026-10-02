@@ -353,9 +353,11 @@ def cmd_pattern(args) -> int:
 
 
 def cmd_atm_profile(args) -> int:
-    from .atmos import ProfileConfig
+    from .advise import _annual, model_years
+    from .atmos import ProfileConfig, profile_from_annual
     from .ocean_advise import couple_advice
-    from .restart import build_atm_profile, find_docn_domain, first_model_year, write_profile_file
+    from .restart import file_sha256, first_model_year, write_profile_file
+    from .trend_io import level_annual_means
 
     advice = json.loads(Path(args.advice).read_text())
     if advice.get("somtp_dT") is None:
@@ -363,26 +365,42 @@ def cmd_atm_profile(args) -> int:
         return 1
     case = advice["case"]
     date = args.date or f"{int(advice['model_year']) + 1:04d}-01-01-00000"
-    if first_model_year(date) - 1 != int(advice["model_year"]):
+    end_year = first_model_year(date) - 1
+    if end_year != int(advice["model_year"]):
         print(f"warning: advice data run through model year {advice['model_year']}, "
               f"the restart is {date}")
-    domain = args.domain_file or (find_docn_domain(args.rundir) if args.rundir else None)
+    years_T, T_ann, t_path = level_annual_means(args.trend_dir, case, "T")
+    years_P, P_ann, p_path = level_annual_means(args.trend_dir, case, "PMID")
+    if end_year not in years_P:
+        print(f"no PMID annual mean for model year {end_year}")
+        return 1
+    t_ts, TS_ann = _annual(load_case(args.trend_dir, case), "TS", "native")
+    years_TS = model_years(t_ts, case_start_year(args.trend_dir, case))
     top = "auto" if args.top in (None, "auto") else float(args.top)
-    prof, sources = build_atm_profile(args.archive, case, date, args.baseline_years,
-                                      domain, ProfileConfig(
-                                          top=top, ceiling_Pa=args.ceiling * 100.0,
-                                          taper_bottom_Pa=args.taper_bottom * 100.0))
+    prof = profile_from_annual(years_T, T_ann, years_TS, TS_ann,
+                               P_ann[list(years_P).index(end_year)], end_year,
+                               args.window, args.method,
+                               ProfileConfig(top=top, ceiling_Pa=args.ceiling * 100.0,
+                                             taper_bottom_Pa=args.taper_bottom * 100.0))
+    sources = {str(q.resolve()): file_sha256(q) for q in (t_path, p_path)}
     out_json = Path(args.json)
     stem = out_json.name[:-5] if out_json.name.endswith(".json") else out_json.name
     pfile = out_json.with_name(stem + ".atmprofile.nc")
-    summary = dict(prof.summary(), restart_date=date, sources=sources,
-                   domain_file=str(Path(domain).resolve()) if domain else None)
+    summary = dict(prof.summary(), restart_date=date, sources=sources)
     out = couple_advice(advice, summary)
     sha = write_profile_file(pfile, prof, out["somtp_dT"])
     out["atmosphere"].update(profile_file=str(pfile.resolve()), profile_sha256=sha)
     s_ = out["atmosphere"]
-    print(f"case {case}   restart {date}   profile from {args.baseline_years} yr "
-          f"(surface warmed {s_['dTS_baseline']:+.2f} K)")
+    y0, y1 = s_["years"]
+    how = ("trend: ratio of least-squares slopes" if s_["method"] == "trend"
+           else "difference of two annual means")
+    print(f"case {case}   restart {date}   profile from annual means {y0}-{y1} ({how}; "
+          f"surface {s_['dTS_baseline']:+.2f} K over {s_['baseline_years']:g} yr)")
+    if prof.raw_gain_se is not None:
+        k = prof.p_mid >= args.taper_bottom * 100.0
+        se = sorted(prof.raw_gain_se[k])
+        print(f"measured gain standard error below {args.taper_bottom:g} hPa: median "
+              f"{se[len(se) // 2]:.2f} K/K (max {se[-1]:.2f})")
     print(f"per K of surface warming: {s_['gain_surface']:.2f} K at the lowest level, "
           f"max {s_['gain_max']:.2f}, mass-weighted {s_['gain_mass_weighted']:.2f}; "
           f"full strength up to {s_['top_pressure_Pa'] / 100:.1f} hPa (level "
@@ -924,17 +942,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     ap_ = sub.add_parser("atm-profile",
                          help="couple an ocean advice with an atmosphere jump (cam.r T "
-                              "+ q at fixed RH, measured vertical profile)")
+                              "+ q at fixed RH, vertical profile measured from time means)")
     ap_.add_argument("--advice", required=True,
                      help="advice JSON from 'advise-ocean' (Gregory or --probe)")
-    ap_.add_argument("--archive", required=True,
-                     help="short-term archive root (rest/<date>/ with cam.i and docn.r)")
-    ap_.add_argument("--domain-file", help="docn domain file (area weights for the "
-                                           "surface warming)")
-    ap_.add_argument("--rundir", help="run directory, to find the domain in docn_ocn_in")
+    ap_.add_argument("--trend-dir", required=True,
+                     help="exocam-trend output for the case: <case>_*_cam.txt (TS) and "
+                          "the per-level series <case>_*_camlev_T.txt and _camlev_PMID.txt "
+                          "(run_trend_batch.sh --profile T)")
+    ap_.add_argument("--method", choices=("trend", "annual"), default="trend",
+                     help="trend: least-squares slopes of each level and TS over the "
+                          "window (default); annual: difference of the annual means at "
+                          "both ends of the window")
+    ap_.add_argument("--window", type=int, default=10,
+                     help="years, ending at the advice's last model year (default 10)")
     ap_.add_argument("--date", help="restart date (default: the January after the "
                                     "advice's last model year)")
-    ap_.add_argument("--baseline-years", type=int, default=10)
     ap_.add_argument("--top", default="auto",
                      help="'auto' (up to where the measured warming turns negative) or "
                           "a pressure in Pa above which nothing changes")

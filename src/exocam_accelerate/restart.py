@@ -793,61 +793,6 @@ def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = No
                       dict(report.adjustments), meta)
 
 
-def archived_cam_i(archive, case: str, date: str) -> Path:
-    p = Path(archive) / "rest" / date / f"{case}.cam.i.{date}.nc"
-    if not p.is_file():
-        raise FileNotFoundError(f"no archived cam.i for {date}: {p} (the case must "
-                                f"write inithist at restart dates)")
-    return p
-
-
-def _cam_i_profile(path):
-    """Area-weighted horizontal-mean T per level and mean layer pressure."""
-    _require_netcdf()
-    with netCDF4.Dataset(path) as ds:
-        ds.set_auto_mask(False)
-        T = np.array(ds.variables["T"][0], dtype=float)
-        PS = np.array(ds.variables["PS"][0], dtype=float)
-        gw = np.array(ds.variables["gw"][:], dtype=float)
-        hyam = np.array(ds.variables["hyam"][:], dtype=float)
-        hybm = np.array(ds.variables["hybm"][:], dtype=float)
-        P0 = float(np.array(ds.variables["P0"][...]))
-    w = gw[:, None] * np.ones((1, T.shape[-1]))
-    w = w / w.sum()
-    return (T * w).sum((1, 2)), hyam * P0 + hybm * float((PS * w).sum())
-
-
-def build_atm_profile(archive, case: str, date: str, baseline_years: int = 10,
-                      domain_file=None, config=None):
-    """Measured warming profile from the pristine archived cam.i (and docn.r,
-    for the surface warming) at ``date`` and ``baseline_years`` earlier.
-    Returns ``(profile, sources)``."""
-    from .atmos import ProfileConfig, measured_profile
-
-    if baseline_years <= 0:
-        raise ValueError(f"baseline_years must be positive, got {baseline_years!r}")
-    old_date = shift_date(date, baseline_years)
-    ci_now, ci_old = archived_cam_i(archive, case, date), archived_cam_i(archive, case, old_date)
-    do_now, do_old = archived_docn_r(archive, case, date), archived_docn_r(archive, case, old_date)
-    for p in (do_now, do_old):
-        if is_jumped(p):
-            raise RuntimeError(f"{p.name} is marked as jumped: the profile baseline "
-                               f"must be pristine archived restarts")
-    s_now, s_old = read_somtp(do_now), read_somtp(do_old)
-    if domain_file is not None:
-        g = read_ocean_grid(domain_file)
-        a = np.where(g["mask"].ravel() > 0, g["area"].ravel(), 0.0)
-    else:
-        a = np.ones_like(s_now)
-    dTS = float(((s_now - s_old) * a).sum() / a.sum())
-    T_now, p_now = _cam_i_profile(ci_now)
-    T_old, _ = _cam_i_profile(ci_old)
-    prof = measured_profile(T_old, T_now, dTS, p_now, float(baseline_years),
-                            config or ProfileConfig())
-    srcs = [ci_old, ci_now, do_old, do_now] + ([Path(domain_file)] if domain_file else [])
-    return prof, {str(p): file_sha256(p) for p in srcs}
-
-
 def write_profile_file(path, prof, dTS_jump: Optional[float] = None) -> str:
     _require_netcdf()
     with netCDF4.Dataset(path, "w") as ds:
@@ -857,6 +802,10 @@ def write_profile_file(path, prof, dTS_jump: Optional[float] = None) -> str:
             v = ds.createVariable(name, "f8", ("lev",))
             v[:] = arr
             v.units = units
+        if prof.raw_gain_se is not None:
+            v = ds.createVariable("raw_gain_se", "f8", ("lev",))
+            v[:] = prof.raw_gain_se
+            v.units = "K/K"
         if dTS_jump is not None:
             v = ds.createVariable("dT", "f8", ("lev",))
             v[:] = prof.gain * dTS_jump

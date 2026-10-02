@@ -775,7 +775,7 @@ function renderOcean(d) {
     <div id="p_ts" class="plot" style="height:720px"></div>
   </div>
   ${d.profiles && d.profiles.length ? `<div class="panel" style="margin-top:12px"><div class="ph"><h3>Atmosphere jump profile</h3></div>
-    <div class="cap">From <code>atm-profile</code> (*.atmprofile.nc): warming per level per K of surface warming, measured between two archived cam.i (dotted = raw, solid = applied: smoothed, clipped, tapered above the level where it turns negative). A coupled jump raises T by this × ΔTS and q at fixed RH.</div>
+    <div class="cap">From <code>atm-profile</code> (*.atmprofile.nc): warming per level per K of global-mean surface warming, measured from annual means of exocam-trend's per-level series (dotted = raw, shaded = ±1 se for a trend fit; solid = applied: smoothed, clipped, tapered above the level where it turns negative). A coupled jump raises T by this × ΔTS and q at fixed RH.</div>
     <div id="p_prof" class="plot" style="height:420px"></div></div>` : ''}
   ${d.maps && d.maps.length ? `<div class="panel" style="margin-top:12px"><div class="ph"><h3>Maps (docn.r somtp on the lat-lon grid)</h3></div>
     <div class="cap">From <code>somtp-map</code> (*.latlon.nc) and <code>pattern</code> (*.pattern.nc) files in the directory.</div>
@@ -987,6 +987,11 @@ function plotProfiles(d) {
   const tr = [], cols = [css('--series-1'), css('--series-2'), css('--series-3')];
   d.profiles.forEach((P, i) => {
     const c = cols[i % cols.length], hp = P.p_mid.map(p => p / 100);
+    if (P.raw_gain_se) {
+      const lo = P.raw_gain.map((g, k) => g - P.raw_gain_se[k]), hi = P.raw_gain.map((g, k) => g + P.raw_gain_se[k]);
+      tr.push({ x: lo.concat(hi.slice().reverse()), y: hp.concat(hp.slice().reverse()), mode: 'lines', fill: 'toself',
+        fillcolor: c, opacity: 0.15, line: { width: 0 }, name: `${P.file} (raw ±1 se)`, hoverinfo: 'skip' });
+    }
     tr.push({ x: P.raw_gain, y: hp, mode: 'lines', name: `${P.file} (raw)`, line: { color: c, width: 1, dash: 'dot' },
       hovertemplate: '%{y:.3g} hPa: %{x:.2f} K/K<extra>raw</extra>' });
     tr.push({ x: P.gain, y: hp, mode: 'lines+markers', name: `${P.file} (applied)`, line: { color: c, width: 2.2 }, marker: { size: 4 },

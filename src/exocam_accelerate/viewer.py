@@ -481,7 +481,7 @@ def find_profiles(directory) -> List[dict]:
                     v = ds.variables
                     entry = {"file": path.name,
                              **{k: np.array(v[k][:], dtype=float)
-                                for k in ("gain", "raw_gain", "p_mid", "T_now", "dT")
+                                for k in ("gain", "raw_gain", "raw_gain_se", "p_mid", "T_now", "dT")
                                 if k in v}}
                     meta = json.loads(getattr(ds, "exocam_accelerate", "{}"))
             except (OSError, KeyError, ValueError):

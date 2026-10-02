@@ -374,14 +374,31 @@ What cam.r needs (CAM FV / ExoCAM cesm1.2.1, verified on atlasfu D4 0051):
 - `TCWAT`, `QCWAT` (previous-step T, q of the stratiform scheme) and
   `T_TTEND` shift with T and q.
 
-The profile (`atm-profile`): horizontal-mean T per level from two archived
-cam.i (the run writes one with every restart set), per K of area-mean somtp
-warming between them, 3-point smoothed, clipped to [0, 4], applied from the
-surface up to where the measured warming first turns negative, tapered over
-two levels above. D4 (0041→0051, ΔTS 3.16 K): 1.0 K/K at the lowest level,
-up to 2.8 K/K near 50 hPa, stratosphere cooling (−4.7 K/K at the top, not
-applied). Measured q rises 3.8 %/K near the surface — the fixed-RH
-Clausius–Clapeyron rate at 372 K.
+The profile (`atm-profile`): warming of each model level per K of global-mean
+surface warming, measured from **time means** (user decision 2026-10-02). The
+jump is applied to the instantaneous restarts, but the profile must come from
+a prior window of the run: exocam-trend's per-level series
+(`run_trend_batch.sh --profile T`, area-weighted global means on model levels,
+no interpolation) reduced to annual means. `--method trend` (default) fits
+each level and TS over the last `--window` years (10) and takes the ratio of
+the slopes, with a delta-method standard error per level; `--method annual`
+differences the two annual means at the window's ends. The gain is then
+3-point smoothed, clipped to [0, 4], applied from the surface up to where it
+first turns negative, tapered over two levels above.
+
+The first version differenced two archived cam.i, which are instantaneous
+states: on D5 (0051→0061, ΔTS +0.95 K) that gave −6 K/K through 400–1400 hPa
+and +20 K/K at the model top — weather, not trend — and the auto top then cut
+the jump off at 3927 hPa (mass-weighted gain 0.09). The D4 numbers below came
+from that method and need re-measuring. Cost of the time means on Discover,
+reading only T, Q and PS from the uncompressed cam.h0 (1.4 MB of a 45.7 MB
+month): two annual means 3 s, a 10-yr trend 11 s; file opens dominate, so
+the "~5 GB per 10 yr" only matters if whole files are copied or processed.
+
+Old measurement on D4 (two cam.i, 0041→0051, ΔTS 3.16 K): 1.0 K/K at the
+lowest level, up to 2.8 K/K near 50 hPa, stratosphere cooling (−4.7 K/K at
+the top, not applied). Measured q rises 3.8 %/K near the surface — the
+fixed-RH Clausius–Clapeyron rate at 372 K.
 
 **Troposphere only (user decision 2026-10-01):** the stratosphere and above
 are numerically fragile, so T and q are never changed at pressures below

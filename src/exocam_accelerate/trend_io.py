@@ -7,10 +7,11 @@ value, short-window running mean, long-window running mean). This module
 parses that format into TrendSeries objects; it does not read model netCDF
 output itself.
 
-exocam-trend currently produces only global means of 2D fields — no per-layer
-(vertical) differentiation. Per-layer trend series for 3D acceleration targets
-must be built directly from model output via trends.layer_mean_series until
-exocam-trend grows that capability.
+exocam-trend also writes per-level global means of 3D cam.h0 fields
+(``trend.py --profile T,Q``): one ``<case>_<first>-<last>_camlev_<VAR>.txt``
+per field, header ``month L01 ... Lnn`` (model levels, L01 = top), native
+monthly means only, plus ``..._camlev_PMID.txt`` (mean level pressure, Pa).
+``level_annual_means`` reads those.
 """
 
 from __future__ import annotations
@@ -167,3 +168,46 @@ def merge_trend_files(paths, case_id: str = "?") -> Dict[str, np.ndarray]:
     if month_axis is None:
         raise FileNotFoundError(f"no exocam-trend files given for case {case_id!r}")
     return merged
+
+
+_LEV_SPAN = re.compile(r"_(\d{4})-(\d{2})-(\d{4})-(\d{2})_camlev_([A-Za-z0-9]+)\.txt$")
+
+
+def level_series_file(directory, case_id: str, variable: str) -> Path:
+    """The one ``<case>_*_camlev_<VAR>.txt`` file for a case in ``directory``."""
+    paths = sorted(Path(directory).glob(f"{case_id}_*_camlev_{variable}.txt"))
+    if not paths:
+        raise FileNotFoundError(
+            f"no per-level series {case_id}_*_camlev_{variable}.txt in {directory} "
+            f"(exocam-trend: run_trend_batch.sh --profile T ...)")
+    if len(paths) > 1:
+        raise ValueError(f"{len(paths)} per-level {variable} series for {case_id} in "
+                         f"{directory} ({', '.join(p.name for p in paths)}): keep one")
+    return paths[0]
+
+
+def level_annual_means(directory, case_id: str, variable: str):
+    """Annual means of a per-level exocam-trend series.
+
+    Returns ``(years, means, path)``: model years of the complete years
+    (12 months each, counted from the series' January start) and their
+    (nyears, nlev) annual means.
+    """
+    path = level_series_file(directory, case_id, variable)
+    m = _LEV_SPAN.search(path.name)
+    if m is None:
+        raise ValueError(f"{path.name}: cannot parse the <first>-<last> span")
+    if m.group(2) != "01":
+        raise ValueError(f"{path.name}: series starts in month {m.group(2)}; "
+                         f"annual means need a January start")
+    cols = read_trend_text(path)
+    names = [k for k in cols if k != "month"]
+    if not names or not all(re.fullmatch(r"L\d+", k) for k in names):
+        raise ValueError(f"{path.name}: expected level columns L01 ... after 'month'")
+    data = np.column_stack([cols[k] for k in names])
+    n_years = data.shape[0] // 12
+    if n_years == 0:
+        raise ValueError(f"{path.name}: less than one complete year")
+    means = data[:n_years * 12].reshape(n_years, 12, -1).mean(axis=1)
+    years = int(m.group(1)) + np.arange(n_years)
+    return years, means, path

@@ -224,9 +224,11 @@ constrained; `check` then measures λ and the implied equilibrium from the
 probe's lever arm, and fails a probe after which the imbalance grows.
 
 **Atmosphere too (`atm-profile`).** At 365–375 K an ocean-only jump is mostly
-drained into the vapor column. `atm-profile --advice ADV --archive ARCH --json
+drained into the vapor column. `atm-profile --advice ADV --trend-dir DIR --json
 C.json` couples the advice with a cam.r edit: T per level × a profile measured
-from two archived cam.i, q at fixed RH, dry mass per layer kept (PS rises),
+from time means (the trend of each model level's annual-mean T over the last
+10 years, relative to TS's, from exocam-trend's `--profile T` series; never
+from instantaneous restarts), q at fixed RH, dry mass per layer kept (PS rises),
 `TEOUT` recomputed so CAM's energy fixer does not undo it, and the stratiform
 scheme's previous-step T/q shifted. `jump --advice C.json` then edits docn.r
 and cam.r together (model constants from the run's `atm.log`); `check` and
@@ -311,7 +313,7 @@ Plain-language definitions of the terms used above and in the CLI output. Sectio
 - **`cice.r`**: CICE sea-ice restart: ice volume (`vicen`), enthalpy (`eicen`), area (`aicen`) per category.
 - **`docn.r`**: data-ocean (slab) restart; holds `somtp`, the mixed-layer temperature in K on the docn grid (`gsize = ni*nj`, longitude fastest).
 - **`cam.r`**: CAM atmosphere restart: T, q, winds, `DELP`, `PS`, `TEOUT` and the previous-step fields.
-- **`cam.i`**: CAM initial-condition file written at the end of a year in the archive. Two of them, years apart, give the measured warming profile (`atm-profile`).
+- **`cam.i`**: CAM initial-condition file written at the end of a year in the archive. It is an instantaneous state (it carries weather), so it is not used to measure trends.
 
 ### Energy balance
 
@@ -366,7 +368,7 @@ Plain-language definitions of the terms used above and in the CLI output. Sectio
 ### Coupled atmosphere jump
 
 - **coupled jump** (`atm-profile`): edits `docn.r` and `cam.r` together, with the atmosphere following the ocean. `check` and `rollback` treat them as one jump.
-- **measured profile**: horizontal-mean warming per level between two archived `cam.i`, per K of surface warming. T is scaled by it.
+- **measured profile**: horizontal-mean warming of each model level per K of global-mean surface warming, from annual means of exocam-trend's per-level series (trend over a window, or two annual means). T is scaled by it.
 - **q at fixed RH**: humidity is raised with T so relative humidity is unchanged; warming T alone leaves the air undersaturated and the ocean re-evaporates.
 - **dry mass kept**: each layer's dry air mass is conserved, so adding vapor raises `PS`.
 - **`TEOUT`**: column energy at the end of the last physics step. It is recomputed because CAM's energy fixer would otherwise remove the jump on the first step.

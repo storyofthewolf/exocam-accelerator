@@ -88,8 +88,15 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   `docs/ocean-jump.md`.
 
 - **Coupled atmosphere jump (decided 2026-09-30):** cam.r in place +
-  continuation, measured per-level profile (two archived cam.i), q at fixed
-  RH (`atmos.py`, `restart.apply_atmos_jump`, `cli atm-profile`). Keeps dry
+  continuation, measured per-level profile, q at fixed RH (`atmos.py`,
+  `restart.apply_atmos_jump`, `cli atm-profile`). **Profile from time means
+  (2026-10-02):** the jump edits instantaneous restarts, but the profile
+  comes from annual means of exocam-trend's per-level series (`--profile T`,
+  model levels, no interpolation): `trend` (default, slope ratio over a
+  window, with se) or `annual` (two annual means). Never from two cam.i —
+  they carry weather. Horizontal layer means stay (lon-lat gradients are
+  small in the hot lower atmosphere); revisit 2D jumps only if spin-up rates
+  differ by location (as sea ice does). Keeps dry
   mass per layer (DELP, PS), recomputes **TEOUT** (else the energy fixer
   undoes the jump on step 1), shifts TCWAT/QCWAT/T_TTEND; constants from the
   run's atm.log, refused unless they reproduce TEOUT to 0.1 %.
@@ -114,9 +121,11 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   interface is its `data/*.txt` time-series output (whitespace-separated
   columns: `month  VAR_native  VAR_int1  VAR_int2 ...`), parsed by
   `trend_io.py`. Its `trend_core.build_area_weights` was adapted (with
-  attribution) into `trends.py` because we need per-layer horizontal means of
-  3D fields, which exocam-trend does not produce (it only does global means of
-  2D fields). If exocam-trend gains packaging or per-layer output, revisit.
+  attribution) into `trends.py` when exocam-trend only did global means of 2D
+  fields. Since 2026-10-02 exocam-trend also writes per-level global means of
+  3D fields (`trend.py --profile T,Q` → `<case>_*_camlev_<VAR>.txt`, parsed by
+  `trend_io.level_annual_means`); new per-layer work consumes those rather
+  than reading model output here.
 - **`exocam-casemgr`** (`../exocam-casemgr`) is **reference-only**: read its
   restart handling and branch/hybrid setup to understand mechanics, but never
   import from it or couple to its internals. This tool will later be wired

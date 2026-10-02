@@ -35,21 +35,30 @@ def write_cam_r(path, st):
             x[:] = v
 
 
-def write_cam_i(path, T, ps):
-    with netCDF4.Dataset(path, "w") as ds:
-        for d, n in (("time", 1), ("lev", NL), ("lat", NJ), ("lon", NI)):
-            ds.createDimension(d, n)
-        v = ds.createVariable("T", "f8", ("time", "lev", "lat", "lon"))
-        v[:] = T[None]
-        v = ds.createVariable("PS", "f8", ("time", "lat", "lon"))
-        v[:] = ps[None]
-        v = ds.createVariable("gw", "f8", ("lat",))
-        v[:] = np.ones(NJ)
-        for name, arr in (("hyam", np.zeros(NL)), ("hybm", np.linspace(0.02, 1, NL))):
-            v = ds.createVariable(name, "f8", ("lev",))
-            v[:] = arr
-        v = ds.createVariable("P0", "f8", ())
-        v[...] = 4e5
+def write_trend_series(tdir, T_mean, ps_mean, years=30, dTS_per_yr=0.1):
+    """exocam-trend output through model year ``years``: TS in _cam.txt and the
+    per-level T / PMID series, warming dTS_per_yr at the surface with a gain of
+    0.2 (top) .. 1.0 (bottom) per K, plus a seasonal cycle and weather."""
+    tdir.mkdir()
+    span = f"{CASE}_0001-01-{years:04d}-12"
+    m = np.arange(1, 12 * years + 1)
+    t = (m - 0.5) / 12.0
+    rng = np.random.default_rng(3)
+    season = np.sin(2 * np.pi * t)
+    ts = 340.0 + dTS_per_yr * t + season + 0.05 * rng.standard_normal(m.size)
+    with open(tdir / f"{span}_cam.txt", "w") as f:
+        print("month  TS_native  TS_int1  TS_int2", file=f)
+        for i, v in zip(m, ts):
+            print(f"{i}  {v:.6f}  {v:.6f}  {v:.6f}", file=f)
+    gain = np.linspace(0.2, 1.0, NL)
+    T = (T_mean[None, :] + gain[None, :] * dTS_per_yr * (t[:, None] - years)
+         + season[:, None] + 0.05 * rng.standard_normal((m.size, NL)))
+    P = np.broadcast_to(np.linspace(0.02, 1, NL) * ps_mean, (m.size, NL))
+    for name, arr in (("T", T), ("PMID", P)):
+        with open(tdir / f"{span}_camlev_{name}.txt", "w") as f:
+            print("month  " + "  ".join(f"L{k + 1:02d}" for k in range(NL)), file=f)
+            for i, row in zip(m, arr):
+                print(f"{i}  " + "  ".join(f"{v:.7g}" for v in row), file=f)
 
 
 def write_docn_r(path, val):
@@ -70,13 +79,11 @@ def coupled(tmp_path):
     (run / "rpointer.atm").write_text(cam + "\n")
     (run / "rpointer.ocn").write_text(f"{docn}\n{CASE}.docn.rs1.{D0}.bin\n")
     (run / "atm.log.260930-000000").write_text(LOG)
-    for date, dT, somtp in ((D0, 0.0, 345.0), (D_OLD, -2.0, 343.0)):
-        rest = arch / "rest" / date
-        rest.mkdir(parents=True)
-        write_cam_i(rest / f"{CASE}.cam.i.{date}.nc",
-                    T + dT * np.linspace(0.2, 1.0, NL)[:, None, None], st["PS"])
-        write_docn_r(rest / f"{CASE}.docn.r.{date}.nc", somtp)
-    write_cam_r(arch / "rest" / D0 / cam, st)
+    rest = arch / "rest" / D0
+    rest.mkdir(parents=True)
+    write_docn_r(rest / docn, 345.0)
+    write_cam_r(rest / cam, st)
+    write_trend_series(tmp_path / "trend", T.mean((1, 2)), float(st["PS"].mean()))
     return run, arch, st, T
 
 
@@ -85,10 +92,12 @@ def test_coupled_cli_cycle(coupled, tmp_path, capsys):
     adv = advise_ocean(truncate(gregory_columns(), 30), CASE).to_dict()
     af, cf = tmp_path / "a.json", tmp_path / "c.json"
     af.write_text(json.dumps(adv))
-    assert main(["atm-profile", "--advice", str(af), "--archive", str(arch),
+    assert main(["atm-profile", "--advice", str(af), "--trend-dir", str(tmp_path / "trend"),
                  "--json", str(cf)]) == 0
     c = json.loads(cf.read_text())
     assert c["schema_version"] == "ocean-atm-1" and c["config"]["heat_ratio"] == 1.0
+    assert c["atmosphere"]["method"] == "trend" and c["atmosphere"]["years"] == [21, 30]
+    assert len(c["atmosphere"]["sources"]) == 2
     dTS = c["somtp_dT"]
     assert dTS == pytest.approx(adv["dTS_target"])
     assert main(["jump", "--rundir", str(run), "--advice", str(cf), "--archive", str(arch),
@@ -116,7 +125,8 @@ def test_coupled_refuses_mismatched_profile_date(coupled, tmp_path):
     adv = advise_ocean(truncate(gregory_columns(), 30), CASE).to_dict()
     af, cf = tmp_path / "a.json", tmp_path / "c.json"
     af.write_text(json.dumps(adv))
-    main(["atm-profile", "--advice", str(af), "--archive", str(arch), "--json", str(cf)])
+    main(["atm-profile", "--advice", str(af), "--trend-dir", str(tmp_path / "trend"),
+          "--json", str(cf)])
     c = json.loads(cf.read_text())
     c["atmosphere"]["restart_date"] = D_OLD
     cf.write_text(json.dumps(c))

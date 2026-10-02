@@ -6,7 +6,7 @@ import pytest
 from exocam_accelerate.atmos import (AtmConstants, CamAtmPlugin, ProfileConfig,
                                      STATE_FIELDS, esat, interfaces, jump_state,
                                      measured_profile, p_mid, potential_temperature_field,
-                                     qsat, temperature, total_energy)
+                                     profile_from_annual, qsat, temperature, total_energy)
 
 C = AtmConstants(cpair=1024.26, rair=288.70, zvir=0.5986, gravit=9.8, ptop=3.26)
 NL, NJ, NI = 8, 3, 4
@@ -128,3 +128,60 @@ def test_profile_troposphere_ceiling():
     assert prof.summary()["gain_above_ceiling_max"] == 0.0
     with pytest.raises(ValueError):
         ProfileConfig(ceiling_Pa=2e4, taper_bottom_Pa=1e4)
+
+
+def _annual_case(n=20, nl=8, gain=None, noise=0.0, seed=0):
+    rng = np.random.default_rng(seed)
+    years = np.arange(41, 41 + n)
+    gain = np.linspace(0.3, 1.0, nl) if gain is None else gain
+    TS = 370.0 + 0.1 * (years - years[0]) + noise * rng.standard_normal(n)
+    T = (250.0 + gain[None, :] * (TS - 370.0)[:, None]
+         + noise * rng.standard_normal((n, nl)))
+    p = np.geomspace(3e4, 4e5, nl)
+    return years, T, TS, p, gain
+
+
+def test_profile_from_annual_trend_recovers_gain():
+    years, T, TS, p, gain = _annual_case()
+    cfg = ProfileConfig(smooth=0)
+    prof = profile_from_annual(years, T, years, TS, p, 60, 10, "trend", cfg)
+    np.testing.assert_allclose(prof.raw_gain, gain, atol=1e-9)
+    np.testing.assert_allclose(prof.raw_gain_se, 0.0, atol=1e-6)
+    assert prof.method == "trend" and prof.years == (51, 60)
+    assert prof.dTS == pytest.approx(1.0) and prof.dt_years == 10
+    np.testing.assert_allclose(prof.T_now, T[-1])
+    assert prof.summary()["years"] == [51, 60]
+
+
+def test_profile_from_annual_difference():
+    years, T, TS, p, gain = _annual_case()
+    prof = profile_from_annual(years, T, years, TS, p, 60, 10, "annual", ProfileConfig(smooth=0))
+    np.testing.assert_allclose(prof.raw_gain, gain, atol=1e-9)
+    assert prof.raw_gain_se is None and prof.years == (50, 60)
+
+
+def test_profile_from_annual_noise_and_se():
+    # weather in the annual means: the trend's se covers the error, and the
+    # trend beats a two-point difference on average
+    errs_t, errs_a, z = [], [], []
+    for seed in range(200):
+        years, T, TS, p, gain = _annual_case(noise=0.15, seed=seed)
+        t = profile_from_annual(years, T, years, TS, p, 60, 10, "trend", ProfileConfig(smooth=0))
+        a = profile_from_annual(years, T, years, TS, p, 60, 10, "annual",
+                                ProfileConfig(smooth=0, min_dTS=0.0))
+        errs_t.append(t.raw_gain - gain)
+        errs_a.append(a.raw_gain - gain)
+        z.append((t.raw_gain - gain) / t.raw_gain_se)
+    assert np.sqrt(np.mean(np.square(errs_t))) < np.sqrt(np.mean(np.square(errs_a)))
+    assert 0.7 < np.std(z) < 1.6
+
+
+def test_profile_from_annual_refusals():
+    years, T, TS, p, _ = _annual_case()
+    with pytest.raises(ValueError, match="missing"):
+        profile_from_annual(years, T, years, TS, p, 65, 10)        # window runs past the data
+    with pytest.raises(ValueError, match="method"):
+        profile_from_annual(years, T, years, TS, p, 60, 10, "snapshot")
+    flat = np.full_like(TS, 370.0) + 0.01 * (years - years[0])
+    with pytest.raises(ValueError, match="noise"):
+        profile_from_annual(years, T, years, flat, p, 60, 10)      # 0.1 K over 10 yr
