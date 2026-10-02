@@ -162,6 +162,7 @@ src/exocam_accelerate/
 tests/            pytest unit tests for everything implemented
 docs/restart-integration-questions.md   task-4 findings + open user decisions
 docs/ocean-jump.md                       hot-regime (somtp) jump: physics findings + design
+docs/jump-experiments-log.md             running log of every jump/measurement: what worked, what did not
 ```
 
 ## Conventions
