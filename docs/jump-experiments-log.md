@@ -6,13 +6,14 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 
 ## Lessons so far
 
-1. **A jump keeps only the part that lies along the slow trajectory.** Sea ice (a slow variable on its own) held almost all of a ×1.5 jump. An ocean-only somtp jump in a hot run (D2) lost about 80 % within 3 years, because the atmosphere, which holds most of the heat capacity at these temperatures, had not been moved with it.
+1. **A jump keeps only the part that lies along the slow trajectory.** Sea ice (a slow variable on its own) held almost all of a ×1.5 jump. An ocean-only somtp jump in a hot run (D2) lost most of its step within 3 years even though the whole atmospheric column followed the ocean within the first year: the perturbation is pulled back by the fast feedback (λ ≈ 2.4 W/m²/K), while the run's own slow drift continues at its old rate.
 2. **Near-equilibrium parts of the state are overshot by a uniform jump.** The thin substellar ice melted back after ×1.5. Scale only what is still spinning up (the tapered ice jump).
 3. **Measure profiles and patterns from time means, never from instantaneous restarts.** Two cam.i snapshots gave the right shape for D5's vertical profile but about twice the amplitude (weather).
 4. **The slow vertical response of a hot atmosphere is not its fast response.** In D5 the interannual (fast) response warms the whole column by about 1–2 K per K of surface warming. The decades-long (slow) trend cools the mid-troposphere and warms the upper troposphere about twice as fast as the surface. A jump that imposes the fast pattern will relax back.
 5. **Judge convergence from energy_top over several years, never from one year or from energy_bot.** Single-year energy_top in D2 ranges from −18 to +6 W/m²; energy_bot is noisier still.
 6. **Advice from a post-jump window is contaminated by the post-jump transient.** The ice runs needed about 20 years to settle; a second jump advised from 18 post-jump years was unreliable.
 7. **Interim checks need the run directory.** History files reach the archive only when a job ends, so a mid-run check must build the post-jump years from the run directory and join them to the archived series (only the native columns are valid across the join).
+8. **Pick probe cases with low internal variability.** D2 has multi-year TS swings of about ±1 K and single-year energy_top excursions near −18 W/m² (year 68: an eight-month shortwave and longwave event, not a data error). A probe response of a few K cannot be read against that in 10 years.
 
 ## Sea ice (cold aquaplanets)
 
@@ -31,17 +32,19 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 
 ## Hot, ice-free ocean (atlasfu D-series, 4 bar, 340–375 K)
 
-### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — interim WAIT
+### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — WAIT, little gained
 
-- **Change:** somtp +8.000 K uniform in place (351.885 → 359.885 K), probe mode, probe-dt 4, assumed ocean heat fraction 0.5, so a TS step of +4 K. Advice `$HPC_SCRATCH/atlasfu_d2_probe/D2_probe4_hr2.json`. Continuation job 58680001, years 61–70.
-- **Interim check (2026-10-02, through year 69, 7 settled years):**
+- **Change:** somtp +8.000 K uniform in place (351.885 → 359.885 K), probe mode, probe-dt 4, assumed ocean heat fraction 0.5, so a TS step of +4 K. Advice `$HPC_SCRATCH/atlasfu_d2_probe/D2_probe4_hr2.json`. Continuation job 58680001, years 61–70; archived through restart 0071.
+- **Final check (2026-10-02, years 61–70, 8 settled):** verdict WAIT.
   - Landed: first-year TS +5.33 K net of drift against +4.00 expected, so the implied ocean heat fraction was 0.67, not 0.5.
-  - TS relaxed from 357.9 K (year 61) to about 354 K by years 64–65, then resumed warming at about the pre-jump rate (+0.16 K/yr before, +0.23 ± 0.25 after).
-  - Against the pre-jump trend extrapolated (20- or 30-yr fit), D2 sits about +1.0 K ahead over years 64–69 (+1.2 K at year 69), roughly 6–8 years of spin-up gained from a 5.3 K jump. Interannual TS scatter is about 0.9 K.
-  - energy_top +3.4 → −2.7 ± 3.3 W/m², λ = 2.5 ± 1.3 W/m²/K: restoring, no sign of runaway, not yet resolved. Year 68 alone has energy_top −18.1 W/m²; without it the post-jump mean is about −0.1. Not yet explained.
-  - Verdict WAIT; an extension of about 10 years is likely needed.
-- **Lesson:** an ocean-only jump falls back onto the slow trajectory within about 3 years and keeps only about 20 % of the step. Ocean-only jumps are cheap and safe but inefficient in hot runs; the atmosphere has to move with the ocean, along its slow pattern.
-- **Final check:** pending (year 70, archive).
+  - TS: 357.87 (61), 356.78, 354.92, 353.79, 354.01, 354.24, 355.42, 355.61, 355.38, 353.80 K (70). Pre-jump drift +0.163 ± 0.054 K/yr; post-jump (years 63–70) +0.07 ± 0.22.
+  - Against the pre-jump trend extrapolated (years 41–60 fit), D2 averages +0.8 K ahead over years 64–70 (about 5 years of spin-up), but year 70 is 0.5 K *behind*. With multi-year swings of about ±1 K, the net gain is between zero and about 1 K: not distinguishable from zero with confidence.
+  - energy_top +3.4 → −2.2 ± 3.3 W/m², λ = 2.4 ± 1.4 W/m²/K: restoring, no sign of runaway, not resolved. Year 68 alone has energy_top −18.1 W/m²; without it the post-jump mean is +0.05.
+  - Year 68 is a real event, not a data error: energy_top −5 to −30 W/m² in every month, first from higher OLR (FLNT +15 to +31 W/m² in Mar–Jul), then from less absorbed sunlight (FSNT −16 to −44 W/m² in Aug–Nov), with TS about +1 K throughout. TS then fell 1.6 K in year 70. D2 had a similar 1.5 K dip in year 58 before the jump.
+  - The atmosphere followed the ocean: in year 61 the whole column warmed (+15 K at 144 hPa, +3 K at 660 hPa, +10 K at 2850 hPa; 0.5–2.7 K per K of TS), and over years 64–70 it stays 3–5 K warmer than years 56–60 at every level, with water vapor up 10–95 %. D2 (TS ≈ 355 K) is in the uniform-warming regime that D5 left near TS ≈ 372 K.
+- **Interpretation (not proven):** the jump is restored by the fast feedback (λ ≈ 2.4 W/m²/K, relaxation within about 3 years), while the run's slow drift, with N ≈ +3.5 W/m² sustained for decades and a flat Gregory relation, continues at its own rate. The fast λ restoring a perturbation is not the slow effective λ along the trajectory. A state jump only helps if it moves whatever sets the slow drift, which we have not yet identified for D2.
+- **Lesson:** the ocean-only probe was safe (no crash, no runaway) but bought little. D2 is a poor probe target because of its internal variability.
+- **Next options:** extend about 10 years to resolve λ, or stop the probe and treat D2 as converging on its own; rollback is not indicated.
 
 ### 2026-10-02: D5 vertical warming profile, measured before the coupled jump — no jump yet
 
