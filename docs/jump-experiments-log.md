@@ -44,7 +44,7 @@ Entry template: case, restart, what was changed and by how much, the advice it c
   - The atmosphere followed the ocean: in year 61 the whole column warmed (+15 K at 144 hPa, +3 K at 660 hPa, +10 K at 2850 hPa; 0.5–2.7 K per K of TS), and over years 64–70 it stays 3–5 K warmer than years 56–60 at every level, with water vapor up 10–95 %. D2 (TS ≈ 355 K) is in the uniform-warming regime that D5 left near TS ≈ 372 K.
 - **Interpretation (not proven):** the jump is restored by the fast feedback (λ ≈ 2.4 W/m²/K, relaxation within about 3 years), while the run's slow drift, with N ≈ +3.5 W/m² sustained for decades and a flat Gregory relation, continues at its own rate. The fast λ restoring a perturbation is not the slow effective λ along the trajectory. A state jump only helps if it moves whatever sets the slow drift, which we have not yet identified for D2.
 - **Lesson:** the ocean-only probe was safe (no crash, no runaway) but bought little. D2 is a poor probe target because of its internal variability.
-- **Next options:** extend about 10 years to resolve λ, or stop the probe and treat D2 as converging on its own; rollback is not indicated.
+- **Decision (2026-10-02, user):** extend D2 by 10 years in place (job 58691769, years 71–80) to decide whether ocean-only somtp jumps are worth doing at all. Rollback not indicated.
 
 ### 2026-10-02: D5 vertical warming profile, measured before the coupled jump — no jump yet
 
@@ -61,3 +61,4 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 - **Consequence:** the current `atm-profile` cuts the jump off where warming first turns negative (about 4000 hPa), leaving a mass-weighted gain of 0.06. The coupled jump as built is effectively a small ocean-only jump. Following the measured profile would require cooling part of the column, which the code does not do. **Open decision.**
 - Outputs: `$HPC_SCRATCH/atlasfu_d5_jump/prof60/`, locally `../scratch/atlasfu/d5view/prof60/` and `trend60p/`.
 - Untested: whether D4 or D6 show the same regime change.
+- **Decision (2026-10-02, user):** D5 not jumped; continued unjumped for 5 × 10 yr (job 58691775, RESUBMIT=4) alongside D1 and D3 (58691773, 58691774) to spin up naturally. D4 untouched; D6 continues. A coupled ocean+atmosphere jump remains to be tried on a case still in the uniform-warming regime.
