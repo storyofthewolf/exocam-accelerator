@@ -847,8 +847,10 @@ function plotGregory(d) {
     marker: { size: 7, color: pre.yr, colorscale: [[0, css('--seq-lo')], [1, css('--seq-hi')]], line: { width: 1, color: css('--surface-1') },
       colorbar: preBar() } });
   if (N.smooth && T.smooth) {
-    const [ps] = split(d, { x: N.smooth, y: T.smooth });
+    const [ps, qs] = split(d, { x: N.smooth, y: T.smooth });
     tr.push({ type: 'scatter', mode: 'lines', name: d.which + ' mean', x: ps.x, y: ps.y, line: { color: css('--series-1'), width: 2 }, hoverinfo: 'skip' });
+    // post-jump smoothed line in red, separate from the pre-jump one; pushed before postScatter so it sits under the markers
+    if (qs.x.length) tr.push({ type: 'scatter', mode: 'lines', name: d.which + ' mean (after jump)', x: qs.x, y: qs.y, line: { color: css('--seq2-hi'), width: 2 }, hoverinfo: 'skip' });
   }
   if (post.x.length) tr.push(postScatter(d, post,
     'year %{customdata[0]} (%{customdata[1]} after jump)<br>N %{x:.2f}<br>TS %{y:.2f}<extra>after jump</extra>'));
