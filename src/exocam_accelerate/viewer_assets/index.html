@@ -13,6 +13,7 @@
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
   --seq-lo: #b7d3f6; --seq-hi: #104281;
+  --seq2-lo: #f6c1b8; --seq2-hi: #8a1c13;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
@@ -23,6 +24,7 @@
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
     --seq-lo: #184f95; --seq-hi: #9ec5f4;
+    --seq2-lo: #8f2418; --seq2-hi: #f5aa9c;
   }
 }
 :root[data-theme="dark"] {
@@ -32,6 +34,7 @@
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
   --seq-lo: #184f95; --seq-hi: #9ec5f4;
+  --seq2-lo: #8f2418; --seq2-hi: #f5aa9c;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--page); color: var(--text-primary);
@@ -389,7 +392,7 @@ function piecewise(d, f, x, y) {      // apply a rate estimator between jumps (a
 function stepDiff(x, y) {             // year-to-year difference, centered between years
   return y.map((_, i) => (i === 0 || y[i] === null || y[i - 1] === null) ? null : (y[i] - y[i - 1]) / (x[i] - x[i - 1]));
 }
-const RATE_UNITS = { energy_top: 'W/m²/yr', energy_bot: 'W/m²/yr', gap: 'W/m²/yr', TS: 'K/yr', Tsfc: 'K/yr',
+const RATE_UNITS = { TMQ: 'kg/m²/yr', TGCLDLWP: 'g/m²/yr', TGCLDIWP: 'g/m²/yr',energy_top: 'W/m²/yr', energy_bot: 'W/m²/yr', gap: 'W/m²/yr', TS: 'K/yr', Tsfc: 'K/yr',
   hi: 'm/yr', hs: 'm/yr', ICEFRAC: '1/yr', qi_per_hi: '1/yr' };
 function expandRows(rows) {           // [[key, label]] -> [{key, label, rate}] per the values/rates toggle
   const out = [];
@@ -446,6 +449,18 @@ function split(d, arr) {           // pre/post first jump
   const fj = firstJump(d), pre = { x: [], y: [], yr: [] }, post = { x: [], y: [], yr: [] };
   d.years.forEach((yr, i) => { const s = yr < fj ? pre : post; s.x.push(arr.x[i]); s.y.push(arr.y[i]); s.yr.push(yr); });
   return [pre, post];
+}
+
+// Gregory plots: years before the jump on the blue scale, years after it on a red one (light -> dark, as the blue)
+function preBar() {
+  return { title: { text: 'year', font: { size: 11 } }, x: 1.02, thickness: 10, len: 0.6, tickfont: { color: css('--muted') } };
+}
+function postScatter(d, post, tpl) {   // post-jump annual means: markers only, coloured by years after the jump
+  const n = post.yr.map(y => y - firstJump(d) + 1);
+  return { type: 'scatter', mode: 'markers', name: 'after jump', x: post.x, y: post.y, customdata: post.yr.map((y, i) => [y, n[i]]),
+    hovertemplate: tpl, marker: { size: 8, color: n, colorscale: [[0, css('--seq2-lo')], [1, css('--seq2-hi')]],
+      line: { width: 1, color: css('--surface-1') },
+      colorbar: { title: { text: 'yrs after<br>jump', font: { size: 11 } }, x: 1.17, thickness: 10, len: 0.6, tickfont: { color: css('--muted') } } } };
 }
 
 function plotPhase(d) {
@@ -516,10 +531,10 @@ function plotTemp(d) {
   const [pre, post] = split(d, { x: N.native, y: V.native });
   const tr = [{ type: 'scatter', mode: 'markers', name: 'annual mean', x: pre.x, y: pre.y, customdata: pre.yr,
     hovertemplate: 'year %{customdata}<br>N %{x:.2f}<br>' + state.tvar + ' %{y:.2f}<extra></extra>',
-    marker: { size: 6, color: pre.yr, colorscale: [[0, css('--seq-lo')], [1, css('--seq-hi')]], line: { width: 1, color: css('--surface-1') } } }];
-  if (post.x.length) tr.push({ type: 'scatter', mode: 'markers', name: 'after jump', x: post.x, y: post.y, customdata: post.yr,
-    hovertemplate: 'year %{customdata}<br>N %{x:.2f}<br>' + state.tvar + ' %{y:.2f}<extra>after jump</extra>',
-    marker: { size: 8, color: css('--series-2'), line: { width: 1, color: css('--surface-1') } } });
+    marker: { size: 6, color: pre.yr, colorscale: [[0, css('--seq-lo')], [1, css('--seq-hi')]], line: { width: 1, color: css('--surface-1') },
+      colorbar: post.x.length ? preBar() : undefined } }];
+  if (post.x.length) tr.push(postScatter(d, post,
+    'year %{customdata[0]} (%{customdata[1]} after jump)<br>N %{x:.2f}<br>' + state.tvar + ' %{y:.2f}<extra>after jump</extra>'));
   const T = d.temperatures[state.tvar];
   if (T) {
     tr.push({ type: 'scatter', mode: 'lines', name: T.accepted ? 'reference (accepted)' : 'reference (rejected)',
@@ -830,14 +845,13 @@ function plotGregory(d) {
   tr.push({ type: 'scatter', mode: 'markers', name: 'annual mean', x: pre.x, y: pre.y, customdata: pre.yr,
     hovertemplate: 'year %{customdata}<br>N %{x:.2f} W/m²<br>TS %{y:.2f} K<extra></extra>',
     marker: { size: 7, color: pre.yr, colorscale: [[0, css('--seq-lo')], [1, css('--seq-hi')]], line: { width: 1, color: css('--surface-1') },
-      colorbar: { title: { text: 'year', font: { size: 11 } }, thickness: 10, len: 0.6, tickfont: { color: css('--muted') } } } });
+      colorbar: preBar() } });
   if (N.smooth && T.smooth) {
     const [ps] = split(d, { x: N.smooth, y: T.smooth });
     tr.push({ type: 'scatter', mode: 'lines', name: d.which + ' mean', x: ps.x, y: ps.y, line: { color: css('--series-1'), width: 2 }, hoverinfo: 'skip' });
   }
-  if (post.x.length) tr.push({ type: 'scatter', mode: 'markers+lines', name: 'after jump', x: post.x, y: post.y, customdata: post.yr,
-    hovertemplate: 'year %{customdata}<br>N %{x:.2f}<br>TS %{y:.2f}<extra>after jump</extra>',
-    marker: { size: 8, color: css('--series-2'), line: { width: 1, color: css('--surface-1') } }, line: { color: css('--series-2'), width: 1 } });
+  if (post.x.length) tr.push(postScatter(d, post,
+    'year %{customdata[0]} (%{customdata[1]} after jump)<br>N %{x:.2f}<br>TS %{y:.2f}<extra>after jump</extra>'));
   (d.tried || []).forEach(w => {
     if (G && w.window === d.advice.window_years && w.status === 'ok') return;
     tr.push({ type: 'scatter', mode: 'lines', name: `${w.window} yr window (${w.status === 'ok' ? 'ok' : 'rejected'})`,
@@ -937,7 +951,8 @@ function plotProjection(d) {
 function plotOceanSeries(d) {
   const S = d.series;
   const rows = expandRows([['energy_top', 'N TOA (W/m²)'], ['energy_bot', 'N surface (W/m²)'], ['gap', 'TOA − sfc (W/m²)'],
-    ['TS', 'TS (K)'], ['ICEFRAC', 'ICEFRAC']].filter(([k]) => S[k]));
+    ['TS', 'TS (K)'], ['TMQ', 'TMQ (kg/m²)'], ['TGCLDLWP', 'TGCLDLWP (g/m²)'], ['TGCLDIWP', 'TGCLDIWP (g/m²)'],
+    ['ICEFRAC', 'ICEFRAC']].filter(([k]) => S[k]));
   const n = rows.length, gap = 0.025, h = (1 - gap * (n - 1)) / n;
   const X = d.years.map(y => y + 0.5);
   $('#p_ts').style.height = seriesHeight(n) + 'px';

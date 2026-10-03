@@ -274,7 +274,8 @@ def case_regime(columns: Dict[str, np.ndarray], max_icefrac: float = 0.001) -> s
     return "ice" if _have(columns, ICE_VOLUME_VAR, "native") else "ocean"
 
 
-OCEAN_SERIES = ("energy_top", "energy_bot", "TS", ICE_AREA_VAR)
+OCEAN_SERIES = ("energy_top", "energy_bot", "TS", "TMQ", "TGCLDLWP", "TGCLDIWP",
+                ICE_AREA_VAR)   # column water and cloud paths: drawn when the trend output has them
 
 
 def ocean_payload(columns: Dict[str, np.ndarray], case: str, start_year: int = 1,
