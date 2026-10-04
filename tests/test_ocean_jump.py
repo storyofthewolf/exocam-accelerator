@@ -201,6 +201,25 @@ def test_fail_when_off_the_line():
     assert any("off the Gregory line" in r for r in res.reasons)
 
 
+def test_pass_when_jump_reaches_equilibrium_below_the_line():
+    # D4 (2026-10-04): a coupled jump lands, energy_top goes to ~0 and TS holds
+    # flat, below the equilibrium the pre-jump line predicted — a success
+    log = jump_log()
+    cols = gregory_columns(years=JUMP_YEAR + 8, jump_year=JUMP_YEAR, dT=log["somtp_dT"],
+                           N_offset_after=-3.0)
+    t = cols["month"] / 12.0
+    after = t > JUMP_YEAR - 1
+    TS_hold = log["advice"]["TS_now"] + log["somtp_dT"]
+    rng = np.random.default_rng(1)
+    for w in ("native", "int1", "int2"):
+        cols[f"TS_{w}"] = np.where(after, TS_hold, cols["TS_native"])
+        cols[f"energy_top_{w}"] = np.where(after, 0.1 * rng.standard_normal(t.size),
+                                           cols["energy_top_native"])
+    res = check_ocean_jump(cols, log)
+    assert res.verdict is Verdict.PASS, res.reasons
+    assert any("reached equilibrium" in r for r in res.reasons)
+
+
 def test_fail_on_nan_after_jump():
     log = jump_log()
     cols = gregory_columns(years=JUMP_YEAR + 5, jump_year=JUMP_YEAR, dT=log["somtp_dT"])

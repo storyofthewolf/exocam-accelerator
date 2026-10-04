@@ -189,7 +189,7 @@ const $ = s => document.querySelector(s);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (x, d = 2) => (x === null || x === undefined || Number.isNaN(x)) ? '–' : Number(x).toFixed(d);
 const sgn = (x, d = 2) => (x === null || x === undefined) ? '–' : (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d);
-const DEFAULTS = { nf: '0.5', mf: '1.5', mdt: '10', hr: '1', imb: 'energy_bot', py: '15', pdt: '', win: 'auto', which: 'int2', nt: '', since: '' };
+const DEFAULTS = { nf: '0.5', mf: '1.5', mdt: '10', hr: '1', imb: 'energy_top', py: '15', pdt: '', win: 'auto', which: 'int2', nt: '', since: '' };
 const state = { case: null, data: null, stamp: null, xmode: 'hi', eqtime: false, tvar: 'TS', span: 'recent', prefix: '', rates: 'both' };
 try { const r = localStorage.getItem('sv-rates'); if (r) state.rates = r; } catch (e) {}
 
@@ -709,9 +709,9 @@ function lastN(d, key, k = 5) {       // latest annual value and the mean of the
   const t = v.slice(-k);
   return { now: v[v.length - 1], mean: t.reduce((a, b) => a + b, 0) / t.length, k: t.length };
 }
-function imbalanceTiles(d, fitNote) {  // N_surf and N_TOA now, side by side
+function imbalanceTiles(d, fitNote) {  // N_surf and N_TOA: the 5-yr mean leads (single values are noise)
   const b = lastN(d, 'energy_bot'), t = lastN(d, 'energy_top');
-  const tile = (lab, x, sub) => x ? `<div class="tile"><div class="k">${lab} now</div><div class="v">${sgn(x.now)}</div><div class="s">${sub || `last ${x.k} yr mean ${sgn(x.mean)} W/m²`}</div></div>` : '';
+  const tile = (lab, x, sub) => x ? `<div class="tile"><div class="k">${lab}, last ${x.k} yr mean</div><div class="v">${sgn(x.mean)}</div><div class="s">${sub ? sub + ' · ' : ''}latest year ${sgn(x.now)} W/m²</div></div>` : '';
   return tile('N<sub>surf</sub>', b, d.imbalance === 'energy_bot' ? fitNote : null)
        + tile('N<sub>TOA</sub>', t, d.imbalance === 'energy_top' ? fitNote : null);
 }

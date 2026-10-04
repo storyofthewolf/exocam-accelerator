@@ -230,6 +230,8 @@ class OceanCheckConfig:
     land_sigmas: float = 2.0
     early_fail_factor: float = 3.0
     baseline_years: int = 5
+    #: K/yr floor on the TS drift that still counts as "flat" at equilibrium
+    eq_drift_K_per_yr: float = 0.05
 
     def __post_init__(self) -> None:
         for name in ("settle_years", "min_years", "baseline_years"):
@@ -330,6 +332,31 @@ def check_ocean_jump(columns: Dict[str, np.ndarray], jump_log: dict,
                    tol_N=tol_N, N_bias_before=bias, TS_obs=float(T[settled].mean()),
                    TS_expected=float(advice.get("TS_after") or np.nan))
     bad_N = abs(dN) > tol_N
+
+    # reached equilibrium? energy_top (the planetary balance) within noise of
+    # zero and TS no longer drifting: the jump's goal, whatever the pre-jump
+    # line said (a coupled jump that fills the vapor column lands below a TOA
+    # line bent by that storage — D4, 2026-10-04)
+    if n_set >= config.min_years and "energy_top_native" in columns:
+        _, Ntop = _annual(columns, "energy_top", "native")
+        sig_top = _noise(Ntop[pre]) if pre.sum() >= 3 else _noise(Ntop[post])
+        top_mean = float(Ntop[settled].mean())
+        tol_top = max(config.tol_N, 2.0 * sig_top / np.sqrt(n_set))
+        slope = float(np.polyfit(t[settled], T[settled], 1)[0])
+        tol_slope = max(config.eq_drift_K_per_yr,
+                        2.0 * sig_T / np.sqrt(n_set) / max(n_set - 1, 1))
+        metrics.update(N_top_settled=top_mean, tol_N_top=tol_top,
+                       TS_drift_settled=slope)
+        if abs(top_mean) <= tol_top and abs(slope) <= tol_slope:
+            reasons.append(f"reached equilibrium: energy_top {top_mean:+.2f} W/m2 "
+                           f"(tolerance {tol_top:.2f}) and TS flat at "
+                           f"{float(T[settled].mean()):.2f} K ({slope:+.3f} K/yr) "
+                           f"over {n_set} settled years")
+            if bad_N:
+                reasons.append(f"below the pre-jump Gregory line by {dN:+.2f} W/m2: "
+                               f"that line overestimated the equilibrium")
+            return done(Verdict.PASS)
+
     if bad_N:
         reasons.append(f"N is off the Gregory line by {dN:+.2f} W/m2 (tolerance "
                        f"{tol_N:.2f}): the run is not following the relation the "
