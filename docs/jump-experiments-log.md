@@ -118,3 +118,9 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 - Advice and profiles in `$HPC_SCRATCH/atlasfu_jump1003/`; constants from the archived `atm.log` copies there (`atm.log.S4`, `atm.log.S5`); pristine backups and jump logs in each `run/exocam_accelerate/`.
 - **Run:** in place, plain continuation, STOP_N=10 nyears, REST_OPTION nyears/10, RESUBMIT=4 (years 61–110): S4 job 58718608, S5 job 58718609.
 - **Expect (by analogy with D4):** energy_top falls well below its pre-jump value as the filled vapor column stops absorbing heat. Check first: atm.log first-step energy-fixer correction, NaNs, PS.
+
+### 2026-10-04: S1, S2, S3 at year 60 — near equilibrium, not jumped; continued
+
+- **Trajectory (annual means, years 51–60):** S1 TS 265.2 K, energy_top −1.2 W/m², ICEFRAC 0.66, hi 12.5 m; S2 274.5 K, −0.7, 0.57, 8.4 m; S3 285.0 K, −0.3, 0.18, 3.3 m. TS has been flat for 20 years (trends −0.08, −0.04, +0.06 K/decade, none significant); ICEFRAC steady (S2 −0.003/decade).
+- **Ice thickness is still growing** steadily: S1 +1.1 m/decade, slowing as the Stefan law expects; S2 +0.74 m/decade, not slowing; S3 +0.25. The latent heat this releases (ρ_i L dh/dt × ICEFRAC ≈ 0.7, 0.4, 0.05 W/m²) matches energy_bot and most of the small negative energy_top, so the run is not still cooling. Thickness is the one slow variable left; it barely affects TS or N.
+- **Decision (user):** no jump. Continued in place, STOP_N=10 nyears, RESUBMIT=3 (years 61–100): S1 58720301, S2 58720302, S3 58720303. Trends in `~/pythonWorkspace/exocam-trend/data/exocam_atlasfu_S[123]_0001-01-0060-12_{cam,cice}.txt`. D4 relaunched by the user (job 58718868).
