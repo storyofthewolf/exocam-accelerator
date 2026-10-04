@@ -6,14 +6,16 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 
 ## Lessons so far
 
-1. **A jump keeps only the part that lies along the slow trajectory.** Sea ice (a slow variable on its own) held almost all of a ×1.5 jump. An ocean-only somtp jump in a hot run (D2) lost most of its step within 3 years even though the whole atmospheric column followed the ocean within the first year: the perturbation is pulled back by the fast feedback (λ ≈ 2.4 W/m²/K), while the run's own slow drift continues at its old rate.
+1. **A jump keeps only the part that lies along the slow trajectory.** Sea ice (a slow variable on its own) held almost all of a ×1.5 jump. In the hot runs, the vapor column is the slow reservoir: D4's coupled jump, which filled it at the same time as the ocean, held its whole step (TS flat at +2.7 K for 5 years). D2's ocean-only probe gave back about 2 K of its first-year +5.3 K within 3 years; at year 80 it reads as an overshoot past D2's equilibrium (see the D2 entry), not a jump that failed to hold, but it is not yet confirmed.
 2. **Near-equilibrium parts of the state are overshot by a uniform jump.** The thin substellar ice melted back after ×1.5. Scale only what is still spinning up (the tapered ice jump).
 3. **Measure profiles and patterns from time means, never from instantaneous restarts.** Two cam.i snapshots gave the right shape for D5's vertical profile but about twice the amplitude (weather).
 4. **The slow vertical response of a hot atmosphere is not its fast response.** In D5 the interannual (fast) response warms the whole column by about 1–2 K per K of surface warming. The decades-long (slow) trend cools the mid-troposphere and warms the upper troposphere about twice as fast as the surface. A jump that imposes the fast pattern will relax back.
 5. **Judge convergence from energy_top over several years, never from one year or from energy_bot.** Single-year energy_top in D2 ranges from −18 to +6 W/m²; energy_bot is noisier still.
 6. **Advice from a post-jump window is contaminated by the post-jump transient.** The ice runs needed about 20 years to settle; a second jump advised from 18 post-jump years was unreliable.
 7. **Interim checks need the run directory.** History files reach the archive only when a job ends, so a mid-run check must build the post-jump years from the run directory and join them to the archived series (only the native columns are valid across the join).
-8. **Pick probe cases with low internal variability.** D2 has multi-year TS swings of about ±1 K and single-year energy_top excursions near −18 W/m² (year 68: an eight-month shortwave and longwave event, not a data error). A probe response of a few K cannot be read against that in 10 years.
+8. **Pick probe cases with low internal variability.** D2 has multi-year TS swings of about ±1 K and single-year energy_top excursions near −18 W/m² (year 68: an eight-month shortwave and longwave event, not a data error). A probe response of a few K cannot be read against that in 10 years; D2 needed 20 years and the user's reading of the Gregory plot (see its entry). Its column cloud water (TGCLDLWP, TGCLDIWP) oscillates with a 5–7 yr period, a candidate source of the swings.
+9. **In a hot run, energy_top before a jump includes the vapor column still filling.** D4 had energy_top +3 to +6 W/m² and ran about 6.5 W/m² above energy_bot; after a coupled jump that added 17 % vapor, energy_top fell to about 0 and stayed there, and TMQ stopped growing. A local-curve TS_eq taken from that energy_top (378 K for D4) can overstate the equilibrium; the jumped run sits near 373.5 K so far (preliminary, 5 years).
+10. **The coupled cam.r jump is numerically safe in CESM 1.2.1 when TEOUT is recomputed.** D4's first-step energy-fixer correction was −1.4e-4 W/m², with no NaNs, and the model ran on without a test segment.
 
 ## Sea ice (cold aquaplanets)
 
@@ -32,7 +34,7 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 
 ## Hot, ice-free ocean (atlasfu D-series, 4 bar, 340–375 K)
 
-### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — WAIT, little gained
+### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — PASS at year 80: overshot to the cooling side, continuing
 
 - **Change:** somtp +8.000 K uniform in place (351.885 → 359.885 K), probe mode, probe-dt 4, assumed ocean heat fraction 0.5, so a TS step of +4 K. Advice `$HPC_SCRATCH/atlasfu_d2_probe/D2_probe4_hr2.json`. Continuation job 58680001, years 61–70; archived through restart 0071.
 - **Final check (2026-10-02, years 61–70, 8 settled):** verdict WAIT.
@@ -43,11 +45,14 @@ Entry template: case, restart, what was changed and by how much, the advice it c
   - Year 68 is a real event, not a data error: energy_top −5 to −30 W/m² in every month, first from higher OLR (FLNT +15 to +31 W/m² in Mar–Jul), then from less absorbed sunlight (FSNT −16 to −44 W/m² in Aug–Nov), with TS about +1 K throughout. TS then fell 1.6 K in year 70. D2 had a similar 1.5 K dip in year 58 before the jump.
   - The atmosphere followed the ocean: in year 61 the whole column warmed (+15 K at 144 hPa, +3 K at 660 hPa, +10 K at 2850 hPa; 0.5–2.7 K per K of TS), and over years 64–70 it stays 3–5 K warmer than years 56–60 at every level, with water vapor up 10–95 %. D2 (TS ≈ 355 K) is in the uniform-warming regime that D5 left near TS ≈ 372 K.
 - **Interpretation (not proven):** the jump is restored by the fast feedback (λ ≈ 2.4 W/m²/K, relaxation within about 3 years), while the run's slow drift, with N ≈ +3.5 W/m² sustained for decades and a flat Gregory relation, continues at its own rate. The fast λ restoring a perturbation is not the slow effective λ along the trajectory. A state jump only helps if it moves whatever sets the slow drift, which we have not yet identified for D2.
-- **Lesson:** the ocean-only probe was safe (no crash, no runaway) but bought little. D2 is a poor probe target because of its internal variability.
+- **Lesson (year 70; revised at year 80, below):** the ocean-only probe was safe (no crash, no runaway) but bought little. D2 is a poor probe target because of its internal variability.
 - **Decision (2026-10-02, user):** extend D2 by 10 years in place (job 58691769, years 71–80) to decide whether ocean-only somtp jumps are worth doing at all. Rollback not indicated.
+- **Year-80 data (2026-10-03):** trends regenerated through year 80 with TMQ, TGCLDLWP, TGCLDIWP (`$HPC_SCRATCH/atlasfu_d2_probe/trend80w`, locally `../scratch/atlasfu/d2check80w`). Global means from `runmgr check --energy`: years 76–80 TS 353.7 K, energy_top −2.8 W/m²; years 73–80 TS 353.8 K, energy_top −0.9 W/m². exocam-trend 10-yr means at year 80: energy_top −0.40, energy_bot +1.04 W/m².
 - **Check at year 80 (2026-10-03, years 61–80, 18 settled):** `check` verdict PASS (probe branch: equilibrium bracketed). TS 352.31 → 354.08 K; energy_top +3.38 → −1.27 ± 2.91 W/m², λ 2.6 ± 1.6 W/m²/K. TS drift +0.163 ± 0.057 K/yr before, −0.114 ± 0.088 after (+2.7σ change); relaxation fit τ 11 ± 4 yr, TS_eq 352.8 ± 0.7 K. TMQ jumped with the probe (≈1300 → 1450–1500 kg/m²) and has not relaxed. TGCLDLWP oscillates 55–155 g/m² with a 5–7 yr period (TGCLDIWP in phase), present before and after the jump; a candidate source of D2's multi-year TS and energy_top swings (untested).
 - **Reading (user, 2026-10-03):** the probe jumped D2 to the cooling side of the Gregory relation, i.e. past equilibrium, and the run is cooling into it; post-jump years in the Gregory plot and every time series agree. The agent had read the same numbers as "little gained"; the user's reading is that the probe bracketed the equilibrium margin. Confirm or refute with several more decades: refuted if the long-term subtle warming trend resumes.
-- **Decision (2026-10-03, user):** continue D2 in place, STOP_N=10, RESUBMIT=4 (years 81–130), job 58708736.
+- **Viewer (2026-10-03):** the Gregory plot now colours post-jump years on their own red scale (years after the jump), unconnected, with a post-jump int2 line. Every post-jump year sits on the cooling side (energy_top < 0 at TS above the pre-jump state), moving back toward the pre-jump Gregory line; TS, energy_top and energy_bot time series agree.
+- **Revised lesson (year 80):** an ocean-only probe large enough to cross the equilibrium is informative: the run's response from the far side (cooling at −0.11 K/yr toward TS_eq ≈ 352.8 K) brackets the equilibrium from above, which the pre-jump drift (+0.16 K/yr, energy_top +3.4) alone did not show. Whether it saved spin-up time depends on that equilibrium being right; the agent's "falls back" reading at the time missed this.
+- **Decision (2026-10-03, user):** continue D2 in place, STOP_N=10, RESUBMIT=4 (years 81–130), job 58708736. Refuted if the slow warming trend resumes.
 
 ### 2026-10-02: D5 vertical warming profile, measured before the coupled jump — no jump yet
 
@@ -66,9 +71,29 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 - Untested: whether D4 or D6 show the same regime change.
 - **Decision (2026-10-02, user):** D5 not jumped; continued unjumped for 5 × 10 yr (job 58691775, RESUBMIT=4) alongside D1 and D3 (58691773, 58691774) to spin up naturally. D4 untouched; D6 continues. A coupled ocean+atmosphere jump remains to be tried on a case still in the uniform-warming regime.
 
-### 2026-10-03: D4, first in-model coupled jump (docn.r somtp + cam.r T/q) at 0061 — running
+### 2026-10-03: D4, first in-model coupled jump (docn.r somtp + cam.r T/q) at 0061 — preliminary: holds, near balance at ~373.5 K
 
 - **Advice:** `advise-ocean` local curve on energy_top, last 40 yr: TS 370.78 K, energy_top +4.05 ± 0.49 W/m², α_diff 0.63 ± 0.20 W/m²/K (resolved), TS_eq ≈ 378.3 K, ocean heat fraction 0.29 (ocean-only advice: somtp +13.1 K, clipped to +10). `atm-profile --method trend --window 20` (years 41–60): gain ≈ 1 K/K at the surface, max 1.78, mass-weighted 0.96, se ≤ 0.10 below 200 hPa; trend-10 and annual-10 agree (0.88, 0.73). D4 is still in the uniform-warming regime (no mid-troposphere cooling as in D5). Files `$HPC_SCRATCH/atlasfu_jump1003/D4_{ocean,coupled}.json`; constants from the archived `atm.log.260930-161123`.
 - **Change:** TS +3.75 K (370.78 → 374.54); somtp +3.753 K uniform (370.60 → 374.35); cam.r T +3.69 K at the lowest level (max +6.67), q at fixed RH: +616 kg/m² vapor (+15 %), PS +60.3 hPa, +72.6 W yr/m²; TEOUT recomputed (constants reproduce it to 1.2e-4). Skips ~19 yr. Expected energy_top after ≈ +2.4 W/m².
 - **Run (user decision 2026-10-03):** the 1-month test (job 58709230) was cancelled before it started; D4 runs 10 yr straight from the jumped restart instead (job 58709261, STOP_N=10 nyears, RESUBMIT=0), with REST_OPTION nmonths/1 left on (monthly restart sets, ~97 MB each). "If it crashes it crashes." Check atm.log (energy fixer first step, NaNs, PS) afterwards or on a crash; restore REST_OPTION nyears/10 for later segments.
+- **Model health (job 58709261, 8.4 h in, model 0065-09):** first-step energy-fixer correction −1.4e-4 W/m² (later steps 1e-3–1e-2), no NaNs in atm.log, global-mean PS 4474.6 hPa at the first step, 4480.5 hPa at 0065-08. About 0.56 model yr per wall-clock hour.
+- **Interim result (run directory, years 61–65; area-weighted annual global means from cam.h0):**
+
+  | year | TS (K) | energy_top (W/m²) | TMQ (kg/m²) | PS (hPa) |
+  |---|---|---|---|---|
+  | 56 | 370.33 | +5.90 | 4067 | 4398.6 |
+  | 57 | 370.25 | +4.51 | 4122 | 4403.9 |
+  | 58 | 370.45 | +3.85 | 4134 | 4405.1 |
+  | 59 | 370.62 | +4.01 | 4161 | 4407.7 |
+  | 60 | 370.78 | +2.90 | 4183 | 4409.9 |
+  | 61 | 373.81 | −1.26 | 4887 | 4478.9 |
+  | 62 | 373.47 | +0.13 | 4894 | 4479.5 |
+  | 63 | 373.52 | −0.25 | 4894 | 4479.5 |
+  | 64 | 373.59 | −0.12 | 4888 | 4479.0 |
+  | 65 (8 mo) | 373.41 | −0.27 | 4902 | 4480.4 |
+
+  - Landed: TS +3.0 K in year 61 against +3.75 planned, then flat near 373.5 K for 4.7 years (pre-jump warming about +0.1–0.2 K/yr).
+  - energy_top fell from +3–6 W/m² to about 0 (−0.3 to +0.1 after year 61), against an expected +2.4. TMQ rose 17 % (dry run: 15 %) and has not grown since; before the jump it grew about 25 kg/m² per year.
+- **Interpretation (preliminary, not proven):** D4 may be at or near equilibrium at about 373.5 K, below the advisor's TS_eq ≈ 378 K. Before the jump energy_top ran about 6.5 W/m² above energy_bot (heat going into the atmosphere, mostly the vapor column); with the column filled, that gap and energy_top both closed. If it holds, the coupled jump skipped D4's slow vapor build-up, more than the ~19 years the advice predicted. Five years is short against the ±1 K multi-year swings seen in D2; the rest of the segment and `check` (energy_bot, implied heat ratio) will tell.
+- **Next:** when job 58709261 ends, regenerate D4 trends through year 70 and run `check`; restore REST_OPTION nyears/10 (and realign restarts to January) before further segments; purge or thin the ~120 monthly restart sets.
 - Same pre-analysis (2026-10-03), not jumped: S5 (363.5 K, +8.5 W/m², α_diff 0.59 ± 0.33 unresolved; coupled probe +5.7 K = +49 % vapor; 10-yr profile window cut by a noisy mid-troposphere dip, 20-yr gives 1.61) and S4 (331.6 K, +6.2 W/m², α_diff 0.20 ± 0.31, last-10-yr λ −0.43 ± 0.39 in the 310–330 K cloud-transition regime; coupled probe +8.7 K = +47 % vapor).
