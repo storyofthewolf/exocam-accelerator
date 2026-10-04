@@ -33,6 +33,16 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 - Advice from the 18 post-jump years fitted `a = +2.70, b = −333` against the pre-jump law's `a = +0.016, b = −117`, which the run still obeys. The post-jump N relaxation contaminates the fit. Not jumped.
 - **Open:** wait longer, reuse the pre-jump law, or refuse a positive asymptote.
 
+### 2026-10-04: grp4 all four — pt01/pt03 second jump, pt02 first (tapered, first in-model), pt04 explicit ×1.5 — running
+
+- **State before (10-yr means):** pt01 yr 160 TS 204.5 K, N_TOA −1.5, hi 78.9 m; pt03 yr 160 TS 192.2, −1.7, 88.5 m; pt02 yr 50 TS 201.3, −4.0, 28.7 m (never jumped); pt04 yr 140 TS 254.5, −2.2, 35.1 m (never jumped).
+- **pt01/pt03, second jump at 0161, tapered peak ×1.5:** the post-jump-only fit is still contaminated (a = +2.7), so the law was fitted across the first jump on native annual means, years 121–160 (`AdvisorConfig(window_years=40, which="native", detect_jumps=False)`, via the API; no CLI flag yet): pt01 N = −0.212 − 105.6/hi (corr −0.997), pt03 N = −0.194 − 140.8/hi (−0.999); raw factors 2.38 / 2.28, clipped to 1.5. Taper baseline 0151 → 0161 (both after the first jump): pt01 73 % full weight / 12 % unscaled, global hi ×1.464, expected N after −1.11; pt03 76 % / 2 %, ×1.462, N after −1.27. The advice's "years skipped" (~53) is wrong: its h² slope spans the first jump. At the post-jump Stefan rate the step is roughly 250–400 years.
+- **pt02, first jump at 0051, tapered peak ×1.5:** `advise` on years 1–50 (int2, 30 yr): N = −0.024 − 115.3/hi, corr −1.000 (the same law as pt01 before its jump); raw 2.01, clipped to 1.5. Taper baseline 0041 → 0051: 70 % full / 15 % unscaled, global hi ×1.468, N after −2.63, skips ~55 yr. pt02 runs about 22 h per 5-yr segment, so this saves about 10 days of compute. **First in-model tapered jump.**
+- **pt04, explicit uniform ×1.5 at 0141 (user decision):** the law does not apply. TS (254.5 K) and ICEFRAC (0.684) have been flat for about 100 yr, while hi grows linearly at about 2.1 m/decade and does not slow (corr(N, 1/hi) 0.45). The latent heat of that growth (about 1.4 W/m²) is most of its steady −2.2 W/m². `jump --ice-factor 1.5` (no advice, so `check` cannot score it); hi 35 → 53 m, about 85 yr of buildup at the present rate. Partial-ice cells scaled too.
+- Files: advice `$HPC_SCRATCH/grp4_advice/{pt01,pt03}_advice_law121.json`, `pt02_advice.json`, tapers `pt0[123]_taper1004.json` (+ `.taper.nc`); locally `../scratch/grp4/jump1004/`. Backups and jump logs in each `run/exocam_accelerate/`.
+- **Run:** in place, RESUBMIT=2 with each case's own STOP_N: pt01 58720425 (yrs 161–190), pt02 58720426 (STOP_N 5: yrs 51–65), pt03 58720427 (161–190), pt04 58720428 (141–170).
+- **Watch:** whether the taper avoids the thin-ice melt-back seen after the first ×1.5; whether pt04's growth rate stays unchanged after the step (a thickness-independent sink would show as no change in N).
+
 ## Hot, ice-free ocean (atlasfu D-series, 4 bar, 340–375 K)
 
 ### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — PASS at year 80: overshot to the cooling side, continuing
