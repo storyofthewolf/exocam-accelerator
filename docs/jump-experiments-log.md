@@ -55,6 +55,16 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 - **pt04 (explicit uniform ×1.5 at 0141), years 141–170; `check` cannot score it (no law).** Years 111–140 → 143–170: hi growth 2.03 → 1.46 m/decade (Stefan would give 1.29, linear 2.03); TS 254.3 → 255.9 K, a **+1.4 K step at the jump** then flat (unexplained: thicker ice should cool the surface; ICEFRAC 0.684 → 0.679, about 32 % open water); energy_top −2.29 → −2.04, energy_bot −0.38 → −0.13 W/m². Snow depth accelerated: 10.9 m at year 140 growing 0.66 m/decade, to 17.4 m at year 170 (about 1.7 m/decade at first, slowing; snow was not scaled). Hypothesis (untested): pt04's linear ice growth came mostly from snow-ice formation by flooding; thicker ice rides higher, flooding stops, and the snow accumulates instead. The jump held but did not move pt04's steady −2 W/m² sink.
 - **Implications:** the conduction-law tapered jump is reliable; the ×1.5 cap limits it (raw factors were 2.0–2.4). pt01's law (asymptote about −0.2 W/m²) puts N = −0.5 at hi ≈ 360 m, thousands of years at present rates, so several more jumps are needed. pt01/pt03 are eligible for a third jump at 0191 (law fitted across the earlier jumps); pt02 follows its pre-jump law, so a second jump could reuse it rather than wait 20 yr for a clean refit; pt04 needs a decision on what its equilibrium is before any further jump. Per-cell maps (thin-ice melt-back under the taper) not yet made.
 
+### 2026-10-08: grp4 pt01 and pt03, third tapered jumps (peak ×1.5) at 0191 — running; pt02 deferred
+
+- **Law fitted across the earlier jumps** (native annual means, years 151–190, `AdvisorConfig(window_years=40, which="native", detect_jumps=False)` via the API; series `$HPC_SCRATCH/grp4_check1007/<pt>/`): pt01 N = −0.204 − 104.1/hi (corr −0.993; before: −0.212 − 105.6/hi); pt03 N = −0.114 − 146.5/hi (corr −0.9986; before: −0.194 − 140.8/hi, so the offset has moved toward zero). Raw factors 2.61 (pt01) and 2.23 (pt03), clipped to 1.5.
+- **Taper** (baseline 0181 → 0191, both after the 0161 jump): pt01 72.5 % full weight, 16.2 % partial, 11.3 % unscaled, global hi ×1.471 (vicen ×1.480, eicen ×1.483); pt03 74.8 / 22.9 / 2.3 %, ×1.468 (vicen ×1.479, eicen ×1.482).
+- **Change:** pt01 hi 118.7 → ~174.6 m, expected N −1.05 → −0.80 W/m²; pt03 hi 133.1 → ~195.4 m, N −1.21 → −0.87.
+- **Years skipped:** the advice says ~70–74, wrong again because its h² slope spans earlier jumps. From d(h²)/dt over years 171–190 (pt01 18.7, pt03 24.3 m²/yr): about **880 yr (pt01) and 840 yr (pt03)**.
+- Files `$HPC_SCRATCH/grp4_jump1008/` (`<pt>_advice.json`, `<pt>_taper.json`, `.taper.nc`); pristine backups and jump logs in each `run/exocam_accelerate/`. Pre-flight passed (rpointers at 0191, archived set pristine).
+- **Run:** in place, STOP_N=10 nyears, REST_N=10, RESUBMIT=2 (years 191–220): pt01 58780896, pt03 58780897.
+- **pt02:** its years 61–65 segment (58758389) was still running; its second jump at 0066 (law across years 26–65, taper 0056 → 0066) is still to do.
+
 ## atlasfu aquaplanets (D-series, 4 bar, 340–377 K, ice-free; S-series, 265–372 K, S1–S3 partly ice-covered)
 
 ### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — PASS at year 80: overshot to the cooling side, continuing
