@@ -231,3 +231,29 @@ Means from `runmgr check --energy` (archived output) and, for D1/D3/D5/D6, exoca
   - Change: somtp 374.818 → 375.668 K (+0.850 uniform); cam.r T +0.82 K at the lowest level (max +1.24); vapor +97 kg/m² (+2 %); PS +9.5 hPa; +11.0 W yr/m². TEOUT reproduced to 1.1e-4 (constants from the archived `atm.log.261004-184048`). Dry run and real jump identical. Files `$HPC_SCRATCH/atlasfu_jump1007/` (`D6_ocean.json`, `D6_coupled.json`, `.atmprofile.nc`, `atm.log.D6`); backups and jump logs in D6's `run/exocam_accelerate/`.
   - Expect energy_top ≈ 0 at TS ≈ 375.7 K (or lower, as in D4, if filling the column lowers N further). Skips roughly 35–50 model years. When the segment ends: atm.log first-step energy fixer, NaNs, PS; then `check`.
 
+
+### 2026-10-15: atlasfu status — ten of eleven cases converged or closed; D6 restarted after a wall-clock kill
+
+10-yr means from `runmgr check --prefix exocam_a --energy -n 10` (archived output). D1 and D2 also from exocam-trend series (`$HPC_SCRATCH/atlasfu_trend1015/D2`, D2 without per-level profiles; D1 reuses `atlasfu_trend1007/D1`; locally `../scratch/atlasfu/view_1015/` with `summarize.py`). Uncertainties are AR(1)-inflated.
+
+| case | last 10 yr | TS (K) | energy_top (W/m²) | verdict |
+|---|---|---|---|---|
+| D1 | 101–110 | 338.0 | +1.9 | converged (stopped at 110) |
+| D2 | 121–130 | 354.1 | +2.4 | converged within its noise; stopped (COMPLETE at 130) |
+| D3 | 101–110 | 356.9 | +0.2 | converged (stopped at 110) |
+| D4 | 111–120 | 373.5 | +0.2 | converged; coupled jump at 0061 held about 60 yr |
+| D5 | 121–130 | 377.3 | +0.4 | converged without a jump |
+| D6 | 55–64 | 374.7 | +1.8 | WALLCLOCK after the 0065 jump; restarted by the user |
+| S1 | 91–100 | 265.1 | −0.9 | converged |
+| S2 | 91–100 | 274.4 | −0.6 | converged |
+| S3 | 91–100 | 285.2 | −0.2 | converged |
+| S4 | 101–110 | 337.0 | −0.4 | converged; coupled jump at 0061 overshot, then settled |
+| S5 | 71–80 | 373.8 | +9.4 | suspected runaway (user); crashed at 0082-05, not continued |
+
+- **D1:** TS 5-yr means 337.8–338.8 K for 50 yr. 30-yr trend −0.18 ± 0.22 K/decade, energy_top 30-yr mean +0.35 ± 0.58. Gregory lines over 15–40 yr give TS_eq 338.3–338.6 K (r ≈ −0.5). The 10-yr +1.75 rides on one swing (years 96–100 −2.7, 106–110 +3.1). Equilibrium about 338.4 ± 0.4 K.
+- **D2:** TS 5-yr means 353.2–354.6 K since year 86; energy_top 5-yr means −3.1 to +4.2. Mean energy_top +2.24 ± 0.40 over 10 yr, +1.40 ± 1.05 over 20, +0.71 ± 0.90 over 30. dTS/dt over 30 yr +0.33 ± 0.41 K/decade; TMQ +31 ± 29 kg/m²/decade, a slow vapor storage like D5's. Gregory lines over 15–40 yr give TS_eq 354.1–354.6 K (weak lines, r ≈ −0.5, but the windows agree). Equilibrium about 354.4 ± 0.5 K. Not jumped: the remaining ≤ 0.5 K is below D2's ±1 K interannual swings and could not be verified. Quote its balance as the 30-yr mean. Narrowing that to about ±0.5 W/m² would take about 30 more years.
+- **S1, S2:** persistent small negative energy_top with TS unchanged since year 60. Probably the same snowfall sequestration on stagnant ice as pt04 (lesson 15); not checked.
+- **S5:** the user reads it as a runaway (or a transition to a much hotter regime). It is recorded as such and not continued. A continuation from 0081-01-01 with more conservative dynamics would be a separate experiment, worthwhile only if the runaway trajectory is itself a result.
+- **D6:** the first post-jump segment (job 58775077, STOP_N 10, REST_N 10) ended WALLCLOCK on 2026-10-10 with nothing archived after year 64. D6 had previously run 9-yr segments. The cause was not diagnosed; the likely reading is that 10 yr did not fit the wall-clock limit, and with REST_N = STOP_N no restart had been written. The user restarted it. Next: atm.log first-step energy fixer, NaNs, PS, then `check` against TS ≈ 375.7 K.
+- **Operational lesson:** keep REST_N well below STOP_N (5 or 1) on segments near the wall-clock limit, so a timeout keeps its progress.
+- **Tooling note:** exocam-trend with `--profile T,Q` over 130 yr exceeded the 10-min login-node watchdog (killed at 575 s); without profiles it took 3.5 min. Long profile runs belong in a batch job.
