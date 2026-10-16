@@ -96,6 +96,14 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 - Files `$HPC_SCRATCH/grp4_jump1016/` (`pt02_advice.json`, `pt02_taper.json`, `.taper.nc`); pristine backup and jump log in `run/exocam_accelerate/`. Pre-flight passed.
 - **Run:** in place, STOP_N=5 nyears, REST_N=5, RESUBMIT=2 (years 66–80), job 58883658.
 
+### 2026-10-16: pt04 rewound to the pristine 0141 — continuing unjumped for 50 years
+
+- **Summary of the two pt04 jumps** (both ×1.5 at 0141, both 20+ years run): ice only (2026-10-04) and ice + snow with hs/hi kept (2026-10-08) gave the same result. Each warmed the planet by +1.4 K, mostly on the night side, made energy_top only about 0.3 W/m² less negative (−2.28 → −1.9 to −2.0) and noisier, and left ICEFRAC at 0.68. The added thickness, not the snow/ice ratio, moves pt04 into a different, warmer state rather than toward its own equilibrium, and N is no closer to zero. pt04's climate had already converged before any jump (years 111–140); its steady −2 W/m² is snowfall/ice sequestered on stagnant ice (lesson 15), which a jump cannot remove.
+- **User decision:** the jump added noise and warmed the planet; rewind and continue with no jumps for 50 years and see. No move-aside this time: the jumped run's years 141–160 in the archive (history and restart sets 0151/0161) are overwritten as the rerun reaches them (user: that is fine). Its trend series stay in `../scratch/grp4/check1016/trend/pt04/` and its jump log in `../scratch/grp4/check1016/`. The ice-only run remains in `$HPC_ARCHIVE/exocam_ML_grp4_pt04/jump1_iceonly/`.
+- **Rollback** (`rollback --date 0141-01-01-00000 --archive ...`) from the pristine archived 0141 set; rpointers at 0141; the snow-scaled jump log retired to `.accel.rolledback.json`, which replaced the ice-only run's retired log of the same name (a copy is in `../scratch/grp4/check1007/`).
+- **Run:** STOP_N=10 nyears, REST_N=10, RESUBMIT=4 (years 141–190), job 58883777.
+- **Watch:** whether TS and ICEFRAC stay flat at 254.4 K / 0.684 and energy_top at about −2.3 W/m², with hi still growing about 2 m/decade. Until the rerun has passed year 160, archived years 141–160 mix the jumped and unjumped runs; check file dates before generating trends.
+
 ## atlasfu aquaplanets (D-series, 4 bar, 340–377 K, ice-free; S-series, 265–372 K, S1–S3 partly ice-covered)
 
 ### 2026-10-01: D2, ocean-only probe, docn.r somtp +8 K at 0061 — PASS at year 80: overshot to the cooling side, continuing
