@@ -20,7 +20,9 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 12. **An overshoot settles quickly and is a usable result.** S4's coupled +8.7 K overshot its equilibrium, cooled for about 8 years, and has sat at about 337.4 K with energy_top ≈ 0 since (years 81–90 mean +0.5 W/m²): it reached equilibrium about 10 years after the jump, from the warm side. The two-point secant through the pre-jump state and the first post-jump 5-yr mean (334.6 K) undershot that by about 3 K, so it is a bracket, not a prediction.
 13. **Near a runaway, the model's numerics become a limit.** S5 warmed about 12 K after its coupled jump with energy_top staying at +8 to +9.5 W/m², then crashed at model month 0082-05 in the dynamical core (MAPZ vertical remap; T max 394 → 1772 K within a few diagnostic prints). A run heading for a much hotter regime may need more conservative dynamics settings to follow it.
 14. **Vapor added by a coupled jump scales at about 3.7–4 % per K near 375 K**, consistent with Clausius–Clapeyron (L/(R_v T²) ≈ 3.7 %/K at 375 K) times the profile's mass-weighted gain: D4 +15 % for +3.7 K, D6 +2 % for +0.85 K (gain 0.63).
-15. **Some cold cases have no N ≈ 0 equilibrium in this model.** pt04's −2 W/m² is the fusion heat of snowfall accumulating on stagnant thick ice (no seasonal melt, no glacier flow); the climate converged long ago. Check the ice/snow budget before treating a negative N in a partly ice-covered case as spin-up, and keep the snow/ice thickness ratio when jumping ice in such a case (it sits at the flooding threshold).
+15. **Some cold cases have no N ≈ 0 equilibrium in this model.** pt04's −2 W/m² is the fusion heat of snowfall accumulating on stagnant thick ice (no seasonal melt, no glacier flow); the climate converged long ago. Check the ice/snow budget before treating a negative N in a partly ice-covered case as spin-up, and keep the snow/ice thickness ratio when jumping ice in such a case (it sits at the flooding threshold). **Revised 2026-10-20:** the TOA imbalance is real and cannot be "corrected" to zero; the planet loses that energy to space for good. Report N_TOA as it is, split by reservoir (atmosphere, slab, ice + snow): pt04 is converged in climate (atmosphere and slab ≈ 0) but not in energy (−2.1 W/m² into the ice reservoir).
+16. **An ice jump only removes the part of the deficit that goes through the surface.** Split energy_top into energy_bot (conduction-limited freezing, ∝ 1/hi; a thickness jump removes it) and the gap energy_top − energy_bot (fusion heat of snowfall that never melts; independent of hi). pt01–pt03 (190–203 K, ICEFRAC ≥ 0.94, LHFLX 3–17 W/m²): energy_bot ≈ energy_top, gap 0 to −0.2, and the jumps worked. pt04 (256 K, ICEFRAC 0.68, LHFLX 66): energy_bot −0.2, gap −1.9, and nothing for a jump to remove. The conduction-law offsets a (−0.11, −0.20, −0.61 for pt03, pt01, pt02) rank with evaporation: the same snowfall floor at small amplitude.
+17. **Average energy_top over 30+ years in noisy runs.** D1 and D2 (annual σ 3.3 and 4.5 W/m², lag-1 r ≈ 0.3–0.4, a 5–7 yr cloud-water oscillation) show 5- and 10-yr means of +2 to +3 W/m² that are only about 1σ (a 10-yr mean holds about 5 independent years); their 30–40-yr means are +0.4 to +0.7.
 
 ## Sea ice (cold aquaplanets)
 
@@ -68,6 +70,8 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 
 ### 2026-10-08: pt04 diagnosed — no N ≈ 0 equilibrium in this model: snowfall accumulates on stagnant ice; the ×1.5 jump shifted the climate +1.4 K
 
+> **Corrected 2026-10-20:** the +1.4 K is not from the jump. The unjumped rerun from the same pristine 0141 warmed by the same amount (see the 2026-10-20 pt04 entry). The snowfall budget below stands; the "corrected imbalance ≈ 0" reading does not (lesson 15).
+
 - **Method:** NCO decade means (`ncra`) of cam.h0 and cice.h for years 131–140 (before the jump), 146–155 and 161–170 (`$HPC_SCRATCH/pt04_diag/`, locally `../scratch/grp4/pt04_diag/` with `budget.py`, `budget2.py`). Global means weighted by CICE `tarea` and CAM `gw`; bands by angular distance from the substellar point (lat 2°, lon 160°, the FSDS maximum). CICE namelist: `kdyn = 1` (EVP dynamics on), `kitd = 1`, `tr_pond = .true.`.
 - **The TOA deficit is the fusion heat of snow that never melts.** energy_top / energy_bot / gap (W/m²): −2.28 / −0.37 / −1.91 (131–140), −1.98 / −0.10 / −1.88, −2.03 / −0.10 / −1.93. The snowfall onto ice is 216 kg/m²/yr water equivalent (CAM PRECSC+PRECSL and CICE `snow` agree), peaking at 405 mm/yr 70–90° from the substellar point, and its fusion heat is 2.25–2.29 W/m². Snow and ice melt (melts, meltt, meltb, meltl) return only about 0.2 W/m², all at the ice edge (50–90°). So about 2.1 W/m² is sequestered, against the 1.9 W/m² gap: the budget closes within about 10 %. The water is supplied by the open substellar ocean (LHFLX 406 W/m² within 30°), which the slab ocean refills without limit.
 - **The ice is effectively stagnant.** Per band, thickness grows at the thermodynamic rate (70–90°: about 0.33 m/yr against `dvidtt` 0.29–0.36), so transport is small; the 60–100 m slabs are too strong to move. (`dvidtd` in the decade means is fill-value garbage; transport was inferred from the thickness change.)
@@ -98,11 +102,59 @@ Entry template: case, restart, what was changed and by how much, the advice it c
 
 ### 2026-10-16: pt04 rewound to the pristine 0141 — continuing unjumped for 50 years
 
+> **Corrected 2026-10-20:** the unjumped rerun warmed +1.4 K too, so the jumps did not move pt04 into the warmer state (see the 2026-10-20 pt04 entry).
+
 - **Summary of the two pt04 jumps** (both ×1.5 at 0141, both 20+ years run): ice only (2026-10-04) and ice + snow with hs/hi kept (2026-10-08) gave the same result. Each warmed the planet by +1.4 K, mostly on the night side, made energy_top only about 0.3 W/m² less negative (−2.28 → −1.9 to −2.0) and noisier, and left ICEFRAC at 0.68. The added thickness, not the snow/ice ratio, moves pt04 into a different, warmer state rather than toward its own equilibrium, and N is no closer to zero. pt04's climate had already converged before any jump (years 111–140); its steady −2 W/m² is snowfall/ice sequestered on stagnant ice (lesson 15), which a jump cannot remove.
 - **User decision:** the jump added noise and warmed the planet; rewind and continue with no jumps for 50 years and see. No move-aside this time: the jumped run's years 141–160 in the archive (history and restart sets 0151/0161) are overwritten as the rerun reaches them (user: that is fine). Its trend series stay in `../scratch/grp4/check1016/trend/pt04/` and its jump log in `../scratch/grp4/check1016/`. The ice-only run remains in `$HPC_ARCHIVE/exocam_ML_grp4_pt04/jump1_iceonly/`.
 - **Rollback** (`rollback --date 0141-01-01-00000 --archive ...`) from the pristine archived 0141 set; rpointers at 0141; the snow-scaled jump log retired to `.accel.rolledback.json`, which replaced the ice-only run's retired log of the same name (a copy is in `../scratch/grp4/check1007/`).
 - **Run:** STOP_N=10 nyears, REST_N=10, RESUBMIT=4 (years 141–190), job 58883777.
 - **Watch:** whether TS and ICEFRAC stay flat at 254.4 K / 0.684 and energy_top at about −2.3 W/m², with hi still growing about 2 m/decade. Until the rerun has passed year 160, archived years 141–160 mix the jumped and unjumped runs; check file dates before generating trends.
+
+### 2026-10-20: pt02 second jump PASS; third tapered jump (peak ×1.5) at 0081 — running 20 years
+
+- Trends regenerated through year 80 (`trend.py --cam --cice -n 960 --int1 1 --int2 10 --save-data`, in `~/pythonWorkspace/exocam-trend/data/`; locally `../scratch/grp4/check1020/`, viewer directory the same).
+- **Second jump (0066), years 66–80, 13 settled: PASS.** Landed hi 70.23 m vs 70.01 expected (+0.3 %); N −1.96 vs law −2.05 W/m²; TS −0.16 K from the Gregory relation; hi +0.14 m/yr. 5-yr means (TS, energy_top, hi): 56–65 199.4 K, −2.74, 46.6 m; 66–70 198.4, −2.06, 70.5; 71–75 198.3, −1.97, 71.2; 76–80 198.2, −1.90, 71.9.
+- **Third jump advice** (law across both earlier jumps, native annual means, years 41–80, `AdvisorConfig(window_years=40, which="native", detect_jumps=False)` via the API): N = −0.610 − 99.67/hi (corr −0.994; at 0066 −0.641 − 99.6/hi, so the law holds; 30-yr window −0.396 − 112.3/hi). N now −1.84, raw factor 3.58, clipped to 1.5, uniform N_after −1.53.
+- **Taper** (baseline 0071 → 0081): 69.2 % full weight, 15.4 % partial, 15.4 % unscaled (raw peak 4.26), global hi ×1.477 (vicen ×1.483, eicen ×1.486); hi 72.2 → ~107 m, expected N −1.57 W/m², TS ~197.7 K. The tool says ~40 yr skipped (h² slope spans the earlier jumps, so an underestimate).
+- Files `$HPC_SCRATCH/grp4_jump1020/` (`pt02_advice.json`, `pt02_taper.json`, `.taper.nc`; local copy of the advice `../scratch/grp4/check1020/pt02_advice_0081.json`); pristine backup and jump log in `run/exocam_accelerate/`. Pre-flight passed; dry run and real jump identical.
+- **Run:** in place, STOP_N=5 nyears, **REST_N=1** (was 5: 5-yr segments take 22.3 h of the 24 h limit), RESUBMIT=3 (years 81–100), job 58940519. When done: trends, `check`, and a fourth-jump decision (the law needs hi ~3–4× today's to reach pt01/pt03's −0.8 W/m²).
+
+### 2026-10-20: pt04 — the +1.4 K is the model's own; closed as converged in climate; energy budget and snow enthalpy checked
+
+- **Unjumped rerun from the pristine 0141, years 141–190 (job 58883777 and resubmits), trends `../scratch/grp4/check1020/`:**
+
+  | years | TS (K) | energy_top (W/m²) | ICEFRAC | hi (m) |
+  |---|---|---|---|---|
+  | 131–140 | 254.57 | −2.28 | 0.684 | 35.1 |
+  | 141–150 | **256.03** | −2.02 | 0.680 | 37.1 |
+  | 161–170 | 256.02 | −2.15 | 0.678 | 41.0 |
+  | 181–190 | 255.89 | −2.03 | 0.679 | 44.8 |
+
+  hi continues smoothly from 35 m, so the archive holds only the unjumped run. TS rose by the same +1.4 K as both jumped runs (255.9–256.0 K), ramping over months 141-07 to 142-02 (no step at the restart), then flat for 50 years. **The jumps did not cause the warming; they had essentially no effect on TS.** The original run stopped at 140, so there was never an unjumped continuation to compare against until now. Namelist and setup sections of atm, cpl, ice and ocn logs from the last original segment (131–140, 2026-09-27) and the rerun (141–150) differ only in restart names, dates and step counts. Not checked: whether the executable changed between July and September.
+- **User decision: pt04 closed.** Converged in climate at about 256.0 K (the post-141 state, held 50 yr, longer than the 30 yr of the 254.6 K state). The two quasi-stable states about 1.4 K apart are not explained; if pt04's equilibrium is published, compare decade-mean maps of TS, cloud, ICEFRAC and hs for 131–140 vs 141–150 first.
+- **Why pt04 has no N ≈ 0 state and pt01–pt03 do** (last-decade means, W/m² unless stated):
+
+  | | pt03 | pt01 | pt02 | pt04 |
+  |---|---|---|---|---|
+  | TS (K) | 190 | 203 | 198 | 256 |
+  | ICEFRAC | 1.00 | 0.985 | 0.945 | 0.68 |
+  | LHFLX | 3.4 | 9.9 | 17 | 66 |
+  | TMQ (kg/m²) | 0.08 | 0.23 | 0.49 | 14.3 |
+  | hs/hi | 0.007 | 0.009 | 0.016 | 0.31 |
+  | energy_top | −0.82 | −0.75 | −1.94 | −2.03 |
+  | energy_bot | −0.84 | −0.63 | −1.73 | −0.16 |
+  | gap | +0.02 | −0.12 | −0.21 | −1.87 |
+
+  See lesson 16. The gap is the fusion heat released in the atmosphere when vapor freezes to snow and radiated to space; the ocean gave the water up as vapor and gets it back as ice, so the ice + snow system carries that debt until the snow melts, which on pt04 it never does.
+- **Energy diagnostic (user, 2026-10-20):** no "corrected imbalance" holds. N_TOA = dH_atm/dt + dH_slab/dt + dH_ice+snow/dt is the planet's real energy loss. Report N_TOA with that split; climate convergence = TS flat and the atmosphere and slab terms ≈ 0; energy equilibrium = N_TOA ≈ 0. pt04 meets the first, not the second. Proposed tool change (not built): report an ice-reservoir uptake term beside N_TOA, never subtracted from it.
+- **Snow-enthalpy check (one-time):**
+  - Code (pt04 SourceMods, read only): CICE `ice_therm_vertical.F90` adds new snow with `qsnew = −rhos·Lfresh` (lines ~3919–3929), and the column energy check (~4465) includes `−fsnow·Lfresh` and stops the model on failure. docn SOM (`docn_comp_mod.F90` 646–656) charges `−(snow + ioff)·latice` for snow on open water. Slab hblt 50 m everywhere, qdp 0.
+  - Global closure, years 141–150 vs 181–190 (`ncra` decade means of cice.h in `$HPC_SCRATCH/pt04_enthalpy/`, locally `../scratch/grp4/pt04_enthalpy/` with the docn restarts 0141/0191 and the SOM forcing file): grid-mean hi 37.12 → 44.81 m, hs 11.40 → 13.94 m, so the fusion debt is −Lf·(ρi dhi + ρs dhs)/dt = **−2.09 W/m²**, plus an estimated −0.15 to −0.25 for the new ice and snow being colder than 0 °C (Tsfc about −24 °C global mean); slab +0.03 (mean somtp 277.87 → 278.10 K); atmosphere ≈ 0 (TMQ 14.39 → 14.33). Total −2.2 to −2.3 against N_TOA −2.12 (years 141–190): closes within 5–10 %, inside the uncertainty of the sensible estimate. A missing snow enthalpy would show as a ~2 W/m² mismatch. CICE's `qi`/`qs` history fields (units "J") do not behave as column enthalpy (`qs` falls while hs grows 22 %) and were not used.
+- **Model improvements discussed (out of scope for this tool; ExoCAM CICE SourceMods, the user's call):**
+  1. Cap ice + snow thickness and calve the excess, with its enthalpy, to open-ocean cells near the ice edge, where the slab must melt it (as CLM caps snow on land ice and sends frozen runoff to the ocean). Closes energy and water exactly; the cap is arbitrary, the melt location is not neutral and may move the ice edge.
+  2. Sea-glacier flow: gravity spreading of thick floating ice (Weertman, velocity ~h³) toward thinner ice, melting at the edge (Goodman & Pierrehumbert 2003; Pollard & Kasting 2005). Physical steady thickness and melt location; research-grade (top thickness category, enthalpy/snow conservation, substellar geometry).
+  3. Ocean heat transport under the ice (a prescribed day-to-night q-flux in the SOM; input data, no code change) melts from below; it changes the climate on its own and does not guarantee closure.
+  Also: track the water inventory if night-side water trapping becomes a question. In this model it cannot happen: the slab is an unlimited water source, and CICE ice thickness is unrelated to the 50 m slab depth.
 
 ## atlasfu aquaplanets (D-series, 4 bar, 340–377 K, ice-free; S-series, 265–372 K, S1–S3 partly ice-covered)
 
@@ -276,3 +328,25 @@ Means from `runmgr check --energy` (archived output) and, for D1/D3/D5/D6, exoca
 - **D6:** the first post-jump segment (job 58775077, STOP_N 10, REST_N 10) ended WALLCLOCK on 2026-10-10 with nothing archived after year 64. D6 had previously run 9-yr segments. The cause was not diagnosed; the likely reading is that 10 yr did not fit the wall-clock limit, and with REST_N = STOP_N no restart had been written. The user restarted it. Next: atm.log first-step energy fixer, NaNs, PS, then `check` against TS ≈ 375.7 K.
 - **Operational lesson:** keep REST_N well below STOP_N (5 or 1) on segments near the wall-clock limit, so a timeout keeps its progress.
 - **Tooling note:** exocam-trend with `--profile T,Q` over 130 yr exceeded the 10-min login-node watchdog (killed at 575 s); without profiles it took 3.5 min. Long profile runs belong in a batch job.
+
+### 2026-10-20: atlasfu — D1/D2 swings are variability; D6 jump held, 20 more years running; S5 continued and still running away
+
+10-yr and 5-yr means from `runmgr check --prefix exocam_atlasfu --energy -n 10` / `-n 5` (archived output).
+
+| case | window | TS (K) | energy_top 10-yr / 5-yr (W/m²) | status |
+|---|---|---|---|---|
+| D1 | 101–110 | 338.0 | +1.9 / +3.2 | converged (30-yr mean +0.35) |
+| D2 | 121–130 | 354.1 | +2.4 / +2.2 | converged (30-yr mean +0.71) |
+| D3 | 101–110 | 356.9 | +0.2 / +0.0 | converged |
+| D4 | 111–120 | 373.5 | +0.2 / +0.1 | converged |
+| D5 | 121–130 | 377.3 | +0.4 / +0.5 | converged |
+| D6 | 78–87 | 375.4 | +0.6 / +0.9 | jump held; running years 88–107 |
+| S1–S3 | 91–100 | 265.1 / 274.4 / 285.2 | −0.9 / −0.6 / −0.2 | converged |
+| S4 | 101–110 | 337.0 | −0.4 / −0.3 | converged |
+| S5 | 86–95 | 377.5 | +10.4 / +10.0 | continued from 0081; still warming |
+
+- **D1 and D2 are converged; their +2 to +3 W/m² 5- and 10-yr means are variability (user agrees after the viewer, `../scratch/atlasfu/view_1015/`).** Annual energy_top over the last 40 yr: σ 3.3 (D1) and 4.5 (D2) W/m², lag-1 r 0.37 and 0.31, so a 10-yr mean has about 5 independent years and a 1σ of about ±1.5 (D1) and ±2 (D2). Means over the last 5/10/20/30/40 yr: D1 +3.1/+1.75/+0.4/+0.35/+0.4; D2 +2.1/+2.2/+1.4/+0.7/+0.6. 5-yr blocks swing both ways (D1 −2.7 to +3.1; D2 −3.1 to +4.2) with σ about 20 % above white noise. Annual energy_top is anti-correlated with TGCLDLWP (r −0.52 D1, −0.48 D2): every strongly negative block is a high-cloud-water block (D1 96–100: −2.7, 103 g/m²; D2 106–110: −2.4, 105; 116–120: −3.1, 104). TS 5-yr means stay flat (D1 337.8–338.8, D2 353.2–354.6 K). D2 still edges up about +0.3 K/decade (20-yr mean +1.4 above the 30-yr +0.7); a residual drift of a few tenths of a K cannot be excluded but is inside its ±1 K swings. Lesson 17.
+- **D6 (coupled +0.85 K jump at 0065): held, near balance at 375.4 K.** Trends through year 87 (`trend.py --cam -n 1044`, locally `../scratch/atlasfu/view_1020/` with both jump logs). 5-yr means (TS, energy_top): 60–64 374.79, +1.42 (before); 65–69 375.54, +0.45; 70–74 375.51, −0.01; 75–79 375.44, +0.02; 80–84 375.32, +0.18; 83–87 375.38, +0.70. Years 66–87: 375.44 K, +0.26 ± 0.10 W/m² (annual σ 0.5, lag-1 r −0.05; far quieter than D1/D2); TS −0.10 K/decade, TMQ −16 kg/m²/decade, a small settling below the jump point. No overshoot: energy_top went from +1.4 to ~0 at once and stayed within −0.6 to +1.5 in every year; years 85 and 87 (+1.0, +1.5) look like D4's transient 77–80 swing. Target was N = 0 near 375.7 K; skipped roughly 35–50 model years. Not scored with `check`. Two failed jobs since the restart (58877159 after 54 s on 10-15, 58893839 after 4 h on 10-17) were not diagnosed; later 5-yr segments with REST_N 1 ran cleanly (12.4 h each).
+  - **User decision:** run 20 more years to let it settle. `runmgr continue`, STOP_N=5 nyears, REST_N=1, RESUBMIT=3 (years 88–107), job 58940170.
+- **S5: continued by the user from 0081-01-01** (dynamics settings unchanged from D6: nsplit 32, nspltrac 4, nspltvrm 4, div24del2flag 42, ATM_NCPL 48; the earlier values were not recorded). Running past the 0082-05 crash point without trouble: job 58920002 at 0098-09 on 2026-10-19, one resubmit left. TS / energy_top: years 56–60 362.7 K / +8.5 (before the jump); 76–80 374.5 / +9.5; 86–95 377.5 / +10.4; 91–95 378.1 / +10.0. TS is still rising about 0.25 K/yr and energy_top has not fallen at all; at 378 K S5 is +10 W/m² out of balance where D5 balances at 377.3 K. The runaway signature holds.
+- **Open:** D6 after year 107 (trends, `check`, close); S5, how far to follow it.
