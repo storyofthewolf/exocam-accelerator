@@ -430,6 +430,22 @@ logs. A jump that edits two files is one jump: `check` scores the docn.r log,
 
 ## Not done / open
 
+- **Per-level gate for the coupled-jump profile (open design, user 2026-10-25;
+  do not implement without a decision).** `atm-profile` has no
+  trustworthiness gate: it fits one slope per level over the whole window.
+  S5 at 0116 showed why that fails: the 20-yr window (96–115) blended mid-
+  troposphere cooling with rising RH (96–105) and uniform warming at fixed
+  RH (106–115), and reported the column as cooling (jump log 2026-10-25,
+  lesson 18). Proposal: fit each window half separately, level by level, and
+  refuse (or flag) when a level's T or RH trend reverses sign
+  significantly between the halves, reusing the time-domain gate's rule
+  (decelerating passes, accelerating or significantly reversing refuses,
+  sign flips inside the noise are noise). Open: the significance test per
+  level (se from the halves' residuals, inflated for AR(1)); whether to
+  judge levels singly or mass-weighted over layers; refuse versus fall back
+  to a shorter window; T only, or also q/RH. Test offline on S5 (years
+  96–115) and D5 first.
+
 - No real ocean jump has been made yet; the first one is the Tier-1/2 test.
   D4/D5 are the probe candidates (the Gregory advisor refuses them).
 - H2-dominated envelopes: the plugin assumes CAM's constants describe the

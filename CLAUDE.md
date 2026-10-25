@@ -109,6 +109,11 @@ a bare multiplicative factor to restart fields with none of the safeguards).
 - **Other restart paths/targets.** Hybrid reboot (`.i.` files), clm plugins. Remaining questions (O3–O8)
   are in `docs/restart-integration-questions.md`.
 - Run orchestration (submitting/monitoring the forward runs between jumps).
+- **Per-level gate for the coupled-jump profile** (2026-10-25): compare each
+  level's T/RH trend between the two halves of the window and refuse on a
+  significant reversal; `atm-profile` has no gate today. Motivated by S5 at
+  0116 (a 20-yr window blended two regimes). Design questions in
+  `docs/ocean-jump.md` "Not done / open"; lesson 18 in the jump log.
 - Turbet-style in-situ radiative heating-rate multiplication
   (`(P/Plim)^α`, α: 0.5 → 0.3 → 0) is **deferred indefinitely** — it requires
   modifying GCM Fortran source, out of scope for this file-manipulation tool.
