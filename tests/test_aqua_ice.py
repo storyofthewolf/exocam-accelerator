@@ -59,7 +59,7 @@ def test_constraints_clamp_bad_input():
     assert "clamped 1" in report.adjustments["eicen"]
 
 
-@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), 2.5, 0.3])
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), 4.5, 0.2])
 def test_factor_bounds(bad):
     with pytest.raises(ValueError):
         check_factor(bad)

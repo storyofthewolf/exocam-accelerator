@@ -147,7 +147,7 @@ def test_plugin_applies_factor_map_per_cell():
     np.testing.assert_allclose(out["eicen"] / out["vicen"].repeat(4, axis=0),
                                f["eicen"] / f["vicen"].repeat(4, axis=0))
     with pytest.raises(ValueError, match="hard bound"):
-        AquaIcePlugin().apply_delta(f, (fmap * 2, 1.0))
+        AquaIcePlugin().apply_delta(f, (fmap * 3, 1.0))
 
 
 def test_check_uses_effective_factor_and_offset():

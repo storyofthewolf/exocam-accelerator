@@ -149,7 +149,7 @@ def test_to_dict_has_schema_version_and_provenance():
 class TestConfigDomainValidation:
     @pytest.mark.parametrize("kwargs", [
         dict(n_fraction=0.0), dict(n_fraction=1.0), dict(n_fraction=-0.1),
-        dict(max_ice_factor=0.5), dict(max_ice_factor=2.1),
+        dict(max_ice_factor=0.5), dict(max_ice_factor=4.1),
         dict(window_years=0.0), dict(window_years=-5.0),
         dict(settle_years=0), dict(post_jump_min_years=0),
     ])

@@ -39,7 +39,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .aqua_ice import check_factor
+from .aqua_ice import MAX_FACTOR, check_factor
 from .hindcast import annual_mean_series
 from .phase_space import PhaseExtrapolation, PhaseGateConfig, extrapolate
 from .taper import TaperMask, effective_factor, imbalance_ratio, solve_peak
@@ -95,8 +95,8 @@ class AdvisorConfig:
         if not (0.0 < self.n_fraction < 1.0):
             raise ValueError(f"n_fraction must satisfy 0 < n_fraction < 1, got "
                              f"{self.n_fraction!r}")
-        if not (1.0 <= self.max_ice_factor <= 2.0):
-            raise ValueError(f"max_ice_factor must satisfy 1 <= max_ice_factor <= 2 "
+        if not (1.0 <= self.max_ice_factor <= MAX_FACTOR):
+            raise ValueError(f"max_ice_factor must satisfy 1 <= max_ice_factor <= {MAX_FACTOR:g} "
                              f"(a thickening-only cold-case jump), got "
                              f"{self.max_ice_factor!r}")
         if self.window_years is not None and self.window_years <= 0:

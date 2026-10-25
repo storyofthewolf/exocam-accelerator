@@ -40,8 +40,9 @@ from .plugins import PLUGIN_REGISTRY, ConstraintReport, VariablePlugin
 ICE_FIELDS = ("vicen", "eicen")
 SNOW_FIELDS = ("vsnon", "esnon")
 
-#: Hard bound on any single factor, whatever the advisor says.
-MAX_FACTOR = 2.0
+#: Hard bound on any single factor, whatever the advisor says. Raised from 2
+#: to 4 (user, 2026-10-25) for pt02's fourth jump (x3.4 to N ~ -0.7).
+MAX_FACTOR = 4.0
 
 
 def check_factor(factor: float, what: str = "factor") -> float:

@@ -79,7 +79,7 @@ def test_config_from_query():
     assert cfg.n_fraction == 0.3 and cfg.max_ice_factor == 1.2
     assert cfg.window_years is None and cfg.which == "int1" and cfg.since_year is None
     with pytest.raises(ValueError):
-        config_from_query({"max_ice_factor": ["3"]})
+        config_from_query({"max_ice_factor": ["5"]})
 
 
 def test_scan_uses_latest_span_and_finds_logs(tmp_path):

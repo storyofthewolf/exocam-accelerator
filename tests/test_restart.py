@@ -158,7 +158,7 @@ def test_cli_refuses_no_jump_advice(rundir, tmp_path):
 
 
 def test_cli_hard_bound(rundir):
-    assert main(["jump", "--rundir", str(rundir), "--ice-factor", "3",
+    assert main(["jump", "--rundir", str(rundir), "--ice-factor", "5",
                  "--allow-no-archive-rollback", "--skip-slurm-check", "--yes"]) == 2
 
 
