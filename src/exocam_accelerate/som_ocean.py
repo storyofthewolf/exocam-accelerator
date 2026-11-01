@@ -48,18 +48,23 @@ TK_FRZ_SW = 273.15 - 1.8
 FREEZE_MARGIN = 0.05
 #: Hard bound on any cell's increment, whatever the advisor says (K).
 MAX_DT = 25.0
+#: The bound that replaces it for a projection jump (``project``), which must
+#: also be confirmed on the jump command line (``--override-limits``).
+OVERRIDE_MAX_DT = 150.0
 #: Plausible somtp range, K — outside it the file is not a SOM temperature.
 SOMTP_RANGE = (150.0, 500.0)
 
 
-def check_dT(dT, what: str = "somtp increment") -> np.ndarray:
-    """A finite increment (scalar or map) within the hard bound."""
+def check_dT(dT, what: str = "somtp increment", override: bool = False) -> np.ndarray:
+    """A finite increment (scalar or map) within the hard bound (the override
+    bound for a projection jump)."""
     d = np.asarray(dT, dtype=float)
+    bound = OVERRIDE_MAX_DT if override else MAX_DT
     if not np.all(np.isfinite(d)):
         raise ValueError(f"{what} has non-finite values")
-    if np.max(np.abs(d)) > MAX_DT:
+    if np.max(np.abs(d)) > bound:
         raise ValueError(f"{what} {np.max(np.abs(d)):g} K outside the hard bound "
-                         f"+/-{MAX_DT:g} K")
+                         f"+/-{bound:g} K")
     return d
 
 

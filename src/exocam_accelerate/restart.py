@@ -443,7 +443,7 @@ def read_ocean_grid(domain_file) -> Dict[str, np.ndarray]:
 
 def apply_ocean_jump(path, somtp_dT: float, provenance: Optional[dict] = None,
                      dry_run: bool = False, pattern_file=None,
-                     domain_file=None) -> JumpRecord:
+                     domain_file=None, override: bool = False) -> JumpRecord:
     """Add ``somtp_dT`` (K) to somtp in a docn.r file, in place, with backup.
 
     With ``pattern_file`` (from ``write_pattern_file``) each cell gets
@@ -473,7 +473,7 @@ def apply_ocean_jump(path, somtp_dT: float, provenance: Optional[dict] = None,
                                f"backup {backup} is missing — refusing to shift twice")
         source = path
 
-    check_dT(somtp_dT)
+    check_dT(somtp_dT, override=override)
     before = {"somtp": read_somtp(source)}
     n = before["somtp"].size
     ocean = area = None
@@ -491,7 +491,7 @@ def apply_ocean_jump(path, somtp_dT: float, provenance: Optional[dict] = None,
         if weight.size != n:
             raise ValueError(f"pattern map {Path(pattern_file).name} has "
                              f"{weight.size} cells, somtp has {n}")
-        delta = check_dT(somtp_dT * weight, "per-cell somtp increment")
+        delta = check_dT(somtp_dT * weight, "per-cell somtp increment", override)
         pattern_copy = state_dir(path) / (path.name + PATTERN_SUFFIX)
 
     plugin = SomOceanPlugin()
@@ -712,8 +712,10 @@ def read_cam_state(path) -> Dict[str, np.ndarray]:
 
 def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = None,
                      dry_run: bool = False, profile_file=None,
-                     extra_meta: Optional[dict] = None) -> JumpRecord:
-    """Raise cam.r T by ``dT_levels`` (K per level) and q at fixed RH, in place
+                     extra_meta: Optional[dict] = None, vapor_scale=None,
+                     override: bool = False) -> JumpRecord:
+    """Raise cam.r T by ``dT_levels`` (K per level) and q at fixed RH (or by
+    ``vapor_scale``), in place
     with backup, keeping dry mass, TEOUT and the stratiform scheme's
     previous-step state consistent (``atmos.jump_state``). Same backup / log /
     re-apply-from-pristine rules as the other plugins; the record's factor slot
@@ -739,7 +741,7 @@ def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = No
         source = path
 
     before = read_cam_state(source)
-    plugin = CamAtmPlugin(constants)
+    plugin = CamAtmPlugin(constants, vapor_scale=vapor_scale, override=override)
     jumped = plugin.apply_delta(before, np.asarray(dT_levels, dtype=float))
     after, report = plugin.enforce_constraints(before, jumped)
     rep = plugin.last_report
@@ -752,6 +754,8 @@ def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = No
         "case": case_of(path), "restart_file": path.name, "restart_date": date,
         "jump_model_year": first_model_year(date),
         "dT_surface_level": float(dT[-1]), "dT_levels": dT.tolist(),
+        "vapor_scale": (None if vapor_scale is None
+                        else np.asarray(vapor_scale, dtype=float).tolist()),
         "fields": list(WRITTEN_FIELDS), "pristine_backup": str(backup),
         "constants": {k: getattr(constants, k) for k in
                       ("cpair", "rair", "zvir", "gravit", "ptop", "latvap", "latice")},
@@ -781,7 +785,7 @@ def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = No
             var = ds.variables[name]
             var[:] = after[name].astype(var.dtype)
         ds.setncattr(ATTR, json.dumps({k: v for k, v in meta.items()
-                                       if k not in ("dT_levels",)}))
+                                       if k not in ("dT_levels", "vapor_scale")}))
     check = _read(path, list(WRITTEN_FIELDS))
     for name in WRITTEN_FIELDS:
         if not np.array_equal(check[name], after[name].astype(check[name].dtype)):
@@ -793,7 +797,8 @@ def apply_atmos_jump(path, dT_levels, constants, provenance: Optional[dict] = No
                       dict(report.adjustments), meta)
 
 
-def write_profile_file(path, prof, dTS_jump: Optional[float] = None) -> str:
+def write_profile_file(path, prof, dTS_jump: Optional[float] = None,
+                       vapor_scale=None) -> str:
     _require_netcdf()
     with netCDF4.Dataset(path, "w") as ds:
         ds.createDimension("lev", prof.gain.size)
@@ -810,10 +815,21 @@ def write_profile_file(path, prof, dTS_jump: Optional[float] = None) -> str:
             v = ds.createVariable("dT", "f8", ("lev",))
             v[:] = prof.gain * dTS_jump
             v.units = "K"
+        if vapor_scale is not None:
+            v = ds.createVariable("vapor_scale", "f8", ("lev",))
+            v[:] = np.asarray(vapor_scale, dtype=float)
+            v.units = "1"
         ds.setncattr(ATTR, json.dumps(dict(prof.summary(), dTS_jump=dTS_jump)))
     return file_sha256(path)
 
 
 def read_profile_file(path) -> Dict[str, np.ndarray]:
+    """gain, raw_gain, p_mid, T_now; and vapor_scale when the profile has one
+    (a projection), else None — the jump then holds RH fixed."""
     _require_netcdf()
-    return _read(path, ["gain", "raw_gain", "p_mid", "T_now"])
+    out = _read(path, ["gain", "raw_gain", "p_mid", "T_now"])
+    with netCDF4.Dataset(path, "r") as ds:
+        ds.set_auto_mask(False)
+        out["vapor_scale"] = (np.array(ds.variables["vapor_scale"][:])
+                              if "vapor_scale" in ds.variables else None)
+    return out

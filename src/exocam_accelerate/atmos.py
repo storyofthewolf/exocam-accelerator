@@ -75,6 +75,11 @@ MAX_TE_MISMATCH = 1e-3
 #: Refuse a jump that raises the global-mean vapor column by more than this
 #: fraction (a +4.9 K coupled probe on atlasfu D4 adds 34 %).
 MAX_VAPOR_INCREASE = 0.5
+#: With ``override`` (a projection jump, ``project``): the bound on any
+#: level's increment that replaces MAX_LEVEL_DT, and the temperature range of
+#: the ExoRT k-tables (``radgrid.F90`` tgrid), which no jumped cell may leave.
+OVERRIDE_MAX_LEVEL_DT = 150.0
+KTABLE_T_RANGE = (100.0, 500.0)
 
 
 @dataclass(frozen=True)
@@ -383,18 +388,34 @@ def profile_from_annual(years_T, T_annual, years_TS, TS_annual, p_mid, end_year:
 # ---------------------------------------------------------------------------
 
 def jump_state(state: Dict[str, np.ndarray], dT_levels, c: AtmConstants,
-               iterations: int = 4) -> Tuple[Dict[str, np.ndarray], Dict[str, float]]:
+               iterations: int = 4, vapor_scale=None,
+               override: bool = False) -> Tuple[Dict[str, np.ndarray], Dict[str, float]]:
     """Raise T by ``dT_levels`` (per level, broadcast over columns; K) and q at
     fixed relative humidity, keeping each layer's dry mass. Returns the new
-    written fields and a report."""
+    written fields and a report.
+
+    ``vapor_scale`` (per level) replaces fixed RH: each layer's vapor mass per
+    unit dry mass is multiplied by it, then capped at saturation at the new T.
+    ``override`` lifts MAX_LEVEL_DT to OVERRIDE_MAX_LEVEL_DT; the jumped T must
+    then stay inside the k-table range."""
     PT, Q, D = (np.asarray(state[k], dtype=float) for k in ("PT", "Q", "DELP"))
     dT = np.asarray(dT_levels, dtype=float)
     if dT.ndim == 1:
         if dT.size != PT.shape[0]:
             raise ValueError(f"increment has {dT.size} levels, cam.r has {PT.shape[0]}")
         dT = dT.reshape((-1,) + (1,) * (PT.ndim - 1))
-    if not np.all(np.isfinite(dT)) or np.max(np.abs(dT)) > MAX_LEVEL_DT:
-        raise ValueError(f"level increment outside +/-{MAX_LEVEL_DT:g} K or non-finite")
+    bound = OVERRIDE_MAX_LEVEL_DT if override else MAX_LEVEL_DT
+    if not np.all(np.isfinite(dT)) or np.max(np.abs(dT)) > bound:
+        raise ValueError(f"level increment outside +/-{bound:g} K or non-finite")
+    vs = None
+    if vapor_scale is not None:
+        vs = np.asarray(vapor_scale, dtype=float)
+        if vs.shape != (PT.shape[0],):
+            raise ValueError(f"vapor scale has shape {vs.shape}, cam.r has "
+                             f"{PT.shape[0]} levels")
+        if not np.all(np.isfinite(vs)) or np.any(vs <= 0):
+            raise ValueError("vapor scale must be finite and positive")
+        vs = vs.reshape((-1,) + (1,) * (PT.ndim - 1))
     for k, v in state.items():
         if not np.all(np.isfinite(v)):
             raise ValueError(f"cam.r {k} has non-finite values")
@@ -403,6 +424,12 @@ def jump_state(state: Dict[str, np.ndarray], dT_levels, c: AtmConstants,
 
     T = temperature(PT, Q, D, c)
     Tn = T + dT
+    if override:
+        lo, hi = KTABLE_T_RANGE
+        moved = Tn[np.broadcast_to(dT != 0, Tn.shape)]
+        if moved.size and (moved.min() < lo or moved.max() > hi):
+            raise ValueError(f"jumped T spans {moved.min():.1f}-{moved.max():.1f} K, "
+                             f"outside the k-table range {lo:g}-{hi:g} K")
     pe = interfaces(D, c.ptop)
     pm = p_mid(pe)
     es0 = esat(T)
@@ -410,9 +437,17 @@ def jump_state(state: Dict[str, np.ndarray], dT_levels, c: AtmConstants,
     dry = D * (1.0 - Q)
     qs0 = qsat(T, pm, c.epsilon)
     Qn, Dn = Q.copy(), D.copy()
+    sat_capped = np.zeros(Q.shape, dtype=bool)
     for _ in range(iterations):
         pmn = p_mid(interfaces(Dn, c.ptop))
-        Qn = np.where(near_boil, Q, Q * qsat(Tn, pmn, c.epsilon) / qs0)
+        if vs is None:
+            Qn = np.where(near_boil, Q, Q * qsat(Tn, pmn, c.epsilon) / qs0)
+        else:
+            r = Q / (1.0 - Q) * vs
+            Qn = r / (1.0 + r)
+            qs = qsat(Tn, pmn, c.epsilon)
+            sat_capped = Qn > np.maximum(qs, Q)
+            Qn = np.where(sat_capped, np.maximum(qs, Q), Qn)
         Qn = np.minimum(Qn, 0.95)
         Dn = dry / (1.0 - Qn)
     PTn = potential_temperature_field(Tn, Qn, Dn, c)
@@ -442,8 +477,12 @@ def jump_state(state: Dict[str, np.ndarray], dT_levels, c: AtmConstants,
                                          / ((Q * D).sum(0)).mean()),
         "dPS_mean_Pa": float((out["PS"] - np.asarray(state["PS"])).mean()),
         "dT_max": float(np.max(Tn - T)), "dT_min": float(np.min(Tn - T)),
-        "near_boiling_cells": int(near_boil.sum()),
+        "near_boiling_cells": int(near_boil.sum()) if vs is None else 0,
         "q_capped_cells": int((Qn >= 0.95).sum()),
+        "humidity": "fixed RH" if vs is None else "vapor scale",
+        "saturation_capped_cells": int(sat_capped.sum()),
+        "T_max_after": float(Tn.max()), "T_min_after": float(Tn.min()),
+        "override_limits": bool(override),
         "T_check_rms": float(np.sqrt(np.mean(
             (temperature(PTn, Qn, Dn, c) - Tn) ** 2))),
     }
@@ -455,13 +494,18 @@ class CamAtmPlugin(VariablePlugin):
     file_kind = "cam.r"
     variables = WRITTEN_FIELDS
 
-    def __init__(self, constants: Optional[AtmConstants] = None):
+    def __init__(self, constants: Optional[AtmConstants] = None, vapor_scale=None,
+                 override: bool = False):
         self.constants = constants
+        self.vapor_scale = vapor_scale
+        self.override = override
 
     def apply_delta(self, fields, delta):
         if self.constants is None:
             raise ValueError("cam_atm needs the model constants (AtmConstants)")
-        out, self.last_report = jump_state(fields, delta, self.constants)
+        out, self.last_report = jump_state(fields, delta, self.constants,
+                                           vapor_scale=self.vapor_scale,
+                                           override=self.override)
         return out
 
     def enforce_constraints(self, fields_before, fields_after):
@@ -473,7 +517,8 @@ class CamAtmPlugin(VariablePlugin):
             raise ValueError(f"the model constants reproduce the stored TEOUT only to "
                              f"{rep['te_mismatch_max']:.2%} (> {MAX_TE_MISMATCH:.1%}): "
                              f"wrong constants for this case — refusing")
-        if rep.get("vapor_increase_fraction", 0.0) > MAX_VAPOR_INCREASE:
+        if (not self.override
+                and rep.get("vapor_increase_fraction", 0.0) > MAX_VAPOR_INCREASE):
             raise ValueError(f"the jump would add {rep['vapor_increase_fraction']:.0%} "
                              f"to the vapor column (> {MAX_VAPOR_INCREASE:.0%}): too "
                              f"large a shock — use a smaller surface step")

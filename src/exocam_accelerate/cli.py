@@ -29,6 +29,10 @@ advise-ocean  fit TS against the surface imbalance energy_bot (the slab ocean's
 pattern       optional: shape the increment by the local warming rate between
               two archived docn.r restarts (area mean unchanged).
 somtp-map     write docn.r somtp as a lat-lon netCDF (ncview / Panoply / view).
+project       coupled advice to the trend-projected state at --target-year: the
+              column shifted by the projected TS step, vapor scaled to the
+              projected column, with lapse-rate and saturation adjustments.
+              Lifts the hard bounds; jump then needs --override-limits.
 jump / check / rollback / restore work on either plugin; jump picks the file
 from the advice (rpointer.ocn for ocean advice).
 
@@ -416,6 +420,72 @@ def cmd_atm_profile(args) -> int:
     return 0
 
 
+def cmd_project(args) -> int:
+    from .advise import _annual, model_years
+    from .atmos import AtmProfile, ProfileConfig
+    from .ocean_advise import COUPLED_SCHEMA_VERSION
+    from .project import ProjectConfig, project_advice, project_state
+    from .restart import atm_constants_from_log, file_sha256, write_profile_file
+    from .trend_io import file_provenance, level_annual_means
+
+    case = args.case
+    cols = load_case(args.trend_dir, case)
+    start = case_start_year(args.trend_dir, case)
+    t_ts, TS_ann = _annual(cols, "TS", "native")
+    t_w, W_ann = _annual(cols, "TMQ", "native")
+    years_TS, years_W = model_years(t_ts, start), model_years(t_w, start)
+    levs = {v: level_annual_means(args.trend_dir, case, v) for v in ("T", "Q", "PMID")}
+    end_year = int(min(years_TS[-1], *(y[-1] for y, _, _ in levs.values())))
+    constants, logf = atm_constants_from_log(args.atm_log)
+    cfg = ProjectConfig(window=args.window, ceiling_Pa=args.ceiling * 100.0,
+                        taper_bottom_Pa=args.taper_bottom * 100.0)
+    res = project_state(years_TS, TS_ann, years_W, W_ann,
+                        levs["T"][0], levs["T"][1], levs["Q"][1], levs["PMID"][1],
+                        end_year, args.target_year, constants.kappa, constants.epsilon,
+                        cfg)
+    prov = dict(file_provenance(args.trend_dir, case))
+    prov.update({str(p.resolve()): file_sha256(p) for _, _, p in levs.values()})
+    prov[str(logf.resolve())] = file_sha256(logf)
+    out = project_advice(case, end_year, args.target_year, res, cfg,
+                         COUPLED_SCHEMA_VERSION, prov)
+
+    out_json = Path(args.json)
+    stem = out_json.name[:-5] if out_json.name.endswith(".json") else out_json.name
+    pfile = out_json.with_name(stem + ".atmprofile.nc")
+    prof = AtmProfile(gain=res["gain"], raw_gain=res["gain"], p_mid=res["p_mid"],
+                      T_now=res["T_now"], dTS=res["dTS"], dt_years=float(cfg.window),
+                      top_index=res["top_index"],
+                      config=ProfileConfig(ceiling_Pa=res["ceiling_Pa"],
+                                           taper_bottom_Pa=res["taper_bottom_Pa"]),
+                      method="project", years=tuple(res["years"]))
+    sha = write_profile_file(pfile, prof, res["dTS"], vapor_scale=res["vapor_scale"])
+    out["atmosphere"].update(profile_file=str(pfile.resolve()), profile_sha256=sha)
+
+    y0, y1 = res["years"]
+    print(f"case {case}   restart {out['atmosphere']['restart_date']}   linear trends "
+          f"over {y0}-{y1}, projected to model year {args.target_year} "
+          f"({args.target_year - end_year} yr ahead)")
+    print(f"surface   TS {res['TS_now']:.2f} -> {res['TS_target']:.2f} K "
+          f"({res['trend_K_per_yr']:+.3f} K/yr): somtp and troposphere {res['dTS']:+.2f} K")
+    print(f"vapor     column {res['TMQ_now']:.0f} -> {res['TMQ_target']:.0f} kg/m2 "
+          f"(x{res['vapor_factor']:.2f}; vapor/dry ratio x{res['vapor_scale'][-1]:.2f} "
+          f"at the lowest level)")
+    print(f"column    full strength below {res['taper_bottom_Pa'] / 100:.0f} hPa, zero "
+          f"above {res['ceiling_Pa'] / 100:.3g} hPa; jumped mean T "
+          f"{res['T_after_min']:.1f}-{res['T_after_max']:.1f} K")
+    print(" lev    p (hPa)   T now  T after   q now  q after")
+    for k in range(res["gain"].size):
+        if k % 5 == 0 or k >= res["gain"].size - 3:
+            print(f" {k + 1:3d} {res['p_mid'][k] / 100:10.2f} {res['T_now'][k]:7.1f} "
+                  f"{res['T_after'][k]:7.1f} {res['q_now'][k]:7.4f} {res['q_after'][k]:7.4f}")
+    for w in out["warnings"]:
+        print(f"warning: {w}")
+    out_json.write_text(json.dumps(out, indent=2))
+    print(f"wrote {out_json} and {pfile}")
+    print("next: jump --advice <this> --override-limits --dry-run (on the cluster)")
+    return 0
+
+
 def cmd_somtp_map(args) -> int:
     from .restart import find_docn_domain, locate_docn_restart, write_somtp_map
     src = Path(args.docn_r) if args.docn_r else locate_docn_restart(args.rundir)
@@ -537,6 +607,13 @@ def _jump_ocean(args, advice) -> int:
     if (getattr(args, "cice_r", None) or args.ice_factor is not None
             or args.taper_file):
         raise ValueError("ocean jump: --cice-r / --ice-factor / --taper-file do not apply")
+    override = bool(advice and advice.get("override_limits"))
+    if override != bool(getattr(args, "override_limits", False)):
+        raise ValueError("--override-limits must be given exactly when the advice is a "
+                         "projection (override_limits in the advice)"
+                         if override else
+                         "--override-limits applies only to projection advice "
+                         "('exocam-accelerate project')")
     if advice is not None:
         if not _is_ocean(advice):
             raise ValueError("--docn-r / --delta-t given with ice advice")
@@ -582,8 +659,11 @@ def _jump_ocean(args, advice) -> int:
         if blocked(atm["findings"]):
             print("refusing to jump: resolve the BLOCK items above")
             return EXIT_BLOCKED
+    if override:
+        print("OVERRIDE  projection jump: hard bounds lifted —",
+              *advice.get("warnings", []), sep="\n  ")
     rec = apply_ocean_jump(path, dT, advice, dry_run=True, pattern_file=pattern_file,
-                           domain_file=domain_file)
+                           domain_file=domain_file, override=override)
     m = rec.metadata
     print(f"target   {rec.path}")
     print(f"backup   {rec.backup}"
@@ -601,11 +681,16 @@ def _jump_ocean(args, advice) -> int:
     if atm is not None:
         from .restart import apply_atmos_jump
         arec = apply_atmos_jump(atm["path"], atm["dT"], atm["constants"], advice,
-                                dry_run=True, profile_file=atm["profile"])
+                                dry_run=True, profile_file=atm["profile"],
+                                vapor_scale=atm["vapor_scale"], override=override)
         r = arec.metadata["report"]
+        how = ("q at fixed RH" if atm["vapor_scale"] is None else
+               f"q by vapor scale (x{atm['vapor_scale'][-1]:.2f} at the lowest level; "
+               f"{r['saturation_capped_cells']} cells capped at saturation)")
         print(f"cam.r    {atm['path']}")
         print(f"         T +{arec.metadata['dT_surface_level']:.2f} K at the lowest level "
-              f"(max {r['dT_max']:+.2f}), q at fixed RH: +{r['vapor_added_kg_m2']:.0f} "
+              f"(max {r['dT_max']:+.2f}; cells {r['T_min_after']:.1f}-"
+              f"{r['T_max_after']:.1f} K after), {how}: +{r['vapor_added_kg_m2']:.0f} "
               f"kg/m2 vapor ({r['vapor_increase_fraction']:+.0%}), PS "
               f"{r['dPS_mean_Pa'] / 100:+.1f} hPa, energy "
               f"{r['dTE_mean_J_m2'] / 3.156e7:+.1f} W yr/m2 "
@@ -620,18 +705,19 @@ def _jump_ocean(args, advice) -> int:
     if atm is not None:
         from .restart import apply_atmos_jump, restore
         arec = apply_atmos_jump(atm["path"], atm["dT"], atm["constants"], advice,
-                                profile_file=atm["profile"])
+                                profile_file=atm["profile"],
+                                vapor_scale=atm["vapor_scale"], override=override)
         print(f"cam.r written and verified; jump log {arec.log}")
         try:
             rec = apply_ocean_jump(path, dT, advice, pattern_file=pattern_file,
-                                   domain_file=domain_file)
+                                   domain_file=domain_file, override=override)
         except Exception:
             restore(atm["path"], retire_log="failed")
             print("docn.r edit failed: cam.r restored from its pristine backup")
             raise
     else:
         rec = apply_ocean_jump(path, dT, advice, pattern_file=pattern_file,
-                               domain_file=domain_file)
+                               domain_file=domain_file, override=override)
     print(f"written and verified; jump log {rec.log}")
     if probe is not None:
         jobs = probe()
@@ -679,9 +765,10 @@ def _prepare_atmosphere(args, advice, docn_path, archive) -> dict:
     findings.append(Finding("ok", f"model constants from {logf.name}: cp {constants.cpair:.2f}, "
                                   f"R {constants.rair:.2f}, zvir {constants.zvir:.4f}, "
                                   f"g {constants.gravit:g}, ptop {constants.ptop:.3f} Pa"))
-    gain = read_profile_file(pfile)["gain"]
+    prof = read_profile_file(pfile)
     return {"path": cam, "profile": pfile, "constants": constants,
-            "dT": gain * float(a["dTS"]), "findings": findings}
+            "dT": prof["gain"] * float(a["dTS"]), "vapor_scale": prof["vapor_scale"],
+            "findings": findings}
 
 
 def cmd_check(args) -> int:
@@ -971,6 +1058,29 @@ def build_parser() -> argparse.ArgumentParser:
                           "<name>.atmprofile.nc)")
     ap_.set_defaults(func=cmd_atm_profile)
 
+    pj = sub.add_parser("project", help="coupled advice to the trend-projected state "
+                                        "at a target model year (lifts the hard "
+                                        "bounds; jump needs --override-limits)")
+    pj.add_argument("trend_dir", help="exocam-trend output: <case>_*_cam.txt (TS, TMQ) "
+                                      "and <case>_*_camlev_{T,Q,PMID}.txt")
+    pj.add_argument("case", help="case id (file-name prefix)")
+    pj.add_argument("--target-year", type=int, required=True,
+                    help="model year the state is projected to")
+    pj.add_argument("--window", type=int, default=20,
+                    help="years of annual means the trends are fitted over (20)")
+    pj.add_argument("--atm-log", required=True,
+                    help="the run's atm.log (or a directory holding atm.log.*): R/cp "
+                         "and Rd/Rv for the lapse-rate and saturation checks")
+    pj.add_argument("--ceiling", type=float, default=100.0,
+                    help="troposphere-only ceiling, hPa (100; raised automatically if "
+                         "the ramp would be superadiabatic)")
+    pj.add_argument("--taper-bottom", type=float, default=200.0,
+                    help="full-strength jump below this pressure, hPa (200)")
+    pj.add_argument("--json", required=True,
+                    help="coupled advice JSON (profile beside it as "
+                         "<name>.atmprofile.nc)")
+    pj.set_defaults(func=cmd_project)
+
     m = sub.add_parser("somtp-map", help="docn.r somtp -> lat-lon netCDF")
     mg = m.add_mutually_exclusive_group(required=True)
     mg.add_argument("--rundir", help="run directory (docn.r via rpointer.ocn)")
@@ -1005,6 +1115,9 @@ def build_parser() -> argparse.ArgumentParser:
                                         "the path recorded in the advice)")
     j.add_argument("--snow-factor", type=float, default=1.0,
                    help="scale vsnon/esnon too (default 1 = untouched)")
+    j.add_argument("--override-limits", action="store_true",
+                   help="confirm a projection jump ('project' advice): lifts the "
+                        "25 K / vapor-shock bounds; refused for any other advice")
     _add_safety(j)
     j.add_argument("--allow-no-archive-rollback", action="store_true",
                    help="escape hatch for a missing --archive: proceed without an "

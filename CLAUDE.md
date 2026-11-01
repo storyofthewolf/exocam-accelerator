@@ -103,6 +103,16 @@ a bare multiplicative factor to restart fields with none of the safeguards).
   Troposphere only: nothing changes at p < 100 hPa, log-p taper from 200 hPa
   (user: the stratosphere is numerically fragile). Coupled advice:
   somtp by ΔTS (ocean heat fraction 1). Rehearsed on D4 copies; not yet run in-model.
+- **Projection jump** (`project`, user 2026-11-01, atlasfu S5: "jumping 300 years
+  is a gamechanger"): coupled advice to the linear-trend state at a target model
+  year, lifting the 25 K / 50-yr / vapor-shock bounds; `jump` refuses it without
+  `--override-limits` and refuses that flag on any other advice. The column is
+  *shifted* by the projected ΔTS (same troposphere ceiling), not extrapolated per
+  level (S5's per-level trends extrapolate to a 503 K layer over a 435 K surface).
+  Vapor: vapor/dry ratio x (projected / current column), capped at saturation per
+  cell (user choice over fixed RH, which skips near-boiling layers). Stability:
+  ceiling raised until no new superadiabatic layer; jumped T inside the k-table
+  range 100-500 K (`atmos.KTABLE_T_RANGE`).
 
 ### Open (do NOT implement without a user decision)
 
@@ -155,6 +165,8 @@ src/exocam_accelerate/
   ocean_advise.py ocean jump advisor: TS vs energy_bot Gregory line -> somtp increment;
                   probe mode; couple_advice for ocean + atmosphere
   atmos.py        cam_atm plugin: cam.r T + q (fixed RH), dry mass, TEOUT; measured profile
+  project.py      projection jump: linear trends -> shifted column + vapor scale at a
+                  target year; lapse-rate and k-table-range adjustments
   restart.py      netCDF layer: cice.r / docn.r in-place jumps, backup/log in
                   run/exocam_accelerate/, somtp lat-lon maps
   runstate.py     pre-flight (SLURM, rpointers, archive) and whole-set rollback
