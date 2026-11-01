@@ -92,10 +92,13 @@ class SomOceanPlugin(VariablePlugin):
     file_kind = "docn.r"
     variables = SOM_FIELDS
 
+    def __init__(self, override: bool = False):
+        self.override = override
+
     def apply_delta(self, fields: Dict[str, np.ndarray], delta) -> Dict[str, np.ndarray]:
         """``delta`` is the increment in K: a scalar or an array shaped like somtp."""
         somtp = np.asarray(fields["somtp"], dtype=float)
-        d = check_dT(delta)
+        d = check_dT(delta, override=self.override)
         if d.ndim and d.shape != somtp.shape:
             raise ValueError(f"increment map is {d.shape}, somtp is {somtp.shape}")
         return {"somtp": somtp + d}

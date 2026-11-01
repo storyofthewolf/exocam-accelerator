@@ -494,7 +494,7 @@ def apply_ocean_jump(path, somtp_dT: float, provenance: Optional[dict] = None,
         delta = check_dT(somtp_dT * weight, "per-cell somtp increment", override)
         pattern_copy = state_dir(path) / (path.name + PATTERN_SUFFIX)
 
-    plugin = SomOceanPlugin()
+    plugin = SomOceanPlugin(override=override)
     jumped = plugin.apply_delta(before, delta)
     after, report = plugin.enforce_constraints(before, jumped, ocean)
     d = after["somtp"] - before["somtp"]

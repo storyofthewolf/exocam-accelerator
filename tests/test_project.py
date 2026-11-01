@@ -112,18 +112,19 @@ from test_coupled import CASE, D0, LOG, write_cam_r, write_docn_r  # noqa: E402
 
 def write_projection_trends(tdir, T_mean, Q_mean, P_mean, years=30):
     """TS and TMQ in _cam.txt, per-level T / Q / PMID, through model year
-    ``years``: the surface warms 0.1 K/yr, the vapor column 0.5 %/yr."""
+    ``years``: the surface warms 0.3 K/yr (a 100-yr projection crosses the
+    25 K bound), the vapor column 0.5 %/yr."""
     tdir.mkdir()
     span = f"{CASE}_0001-01-{years:04d}-12"
     m = np.arange(1, 12 * years + 1)
     t = (m - 0.5) / 12.0
-    ts = T_mean[-1] + 0.1 * (t - years)
+    ts = T_mean[-1] + 0.3 * (t - years)
     tmq = 500.0 * (1 + 0.005 * (t - years))
     with open(tdir / f"{span}_cam.txt", "w") as f:
         print("month  TS_native  TS_int1  TS_int2  TMQ_native  TMQ_int1  TMQ_int2", file=f)
         for i, a, b in zip(m, ts, tmq):
             print(f"{i}  {a:.6f}  {a:.6f}  {a:.6f}  {b:.6f}  {b:.6f}  {b:.6f}", file=f)
-    rows = {"T": T_mean[None, :] + 0.1 * (t[:, None] - years),
+    rows = {"T": T_mean[None, :] + 0.3 * (t[:, None] - years),
             "Q": np.broadcast_to(Q_mean, (m.size, NL)),
             "PMID": np.broadcast_to(P_mean, (m.size, NL))}
     for name, arr in rows.items():
@@ -160,7 +161,7 @@ def test_project_cli_cycle(projected, tmp_path, capsys):
                  "--atm-log", str(run), "--json", str(cf)]) == 0
     c = json.loads(cf.read_text())
     assert c["mode"] == "project" and c["override_limits"] is True
-    assert c["somtp_dT"] == pytest.approx(10.0, abs=0.05)
+    assert c["somtp_dT"] == pytest.approx(30.0, abs=0.1)
     assert c["vapor_factor"] == pytest.approx(1.5, rel=1e-3)
     assert c["atmosphere"]["restart_date"] == D0
     jump = ["jump", "--rundir", str(run), "--advice", str(cf), "--archive", str(arch),
