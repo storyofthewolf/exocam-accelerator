@@ -1,6 +1,6 @@
 # Session handoff, 2026-10-02
 
-Read CLAUDE.md first, then README.md (including the Glossary) and docs/ocean-jump.md. Load hpc-connect before any Discover contact and exocam-rules before any case action. This file replaces all earlier handoffs.
+Read CLAUDE.md first, then README.md (including the Glossary) and docs/ocean-jump.md. Load hpc-connect before any Discover contact and exocam-model-rules before any case action. This file replaces all earlier handoffs.
 
 ## State at end of session
 
