@@ -235,7 +235,10 @@ def extrapolate(
 
     reasons: List[str] = []
     ratio = _extrapolation_ratio(N, N_target)
-    if ratio > config.max_extrapolation_ratio:
+    # Relative tolerance: advise/ocean_advise clamp N_target to exactly
+    # max_extrapolation_ratio, and recomputing the ratio can land a few ulp
+    # above it (5.000000000000002), which would reject the clamped target.
+    if ratio > config.max_extrapolation_ratio * (1.0 + 1e-9):
         reasons.append(f"target N={N_target:+.2f} lies {ratio:.1f}x the sampled "
                        f"N-range beyond the window (> {config.max_extrapolation_ratio:g})")
 
