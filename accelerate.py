@@ -24,7 +24,7 @@ import numpy   as np
 import os
 import sys
 import exocampy_tools  as exo
-# BUG (found 2026-11-12, hpc-connect live test D2; to fix later): trend_utils
+# BUG (found 2026-11-12, hpc-connect live test D2; see DEV-NOTES.md): trend_utils
 # lives in the exocam-trend repo, not here. Run through hpc-connect's hpc-run
 # (`python accelerate.py --help` from a payload shell), this import fails with
 # ModuleNotFoundError: No module named 'trend_utils', before argparse runs.
