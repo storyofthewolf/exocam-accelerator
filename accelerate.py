@@ -24,6 +24,15 @@ import numpy   as np
 import os
 import sys
 import exocampy_tools  as exo
+# BUG (found 2026-11-12, hpc-connect live test D2; to fix later): trend_utils
+# lives in the exocam-trend repo, not here. Run through hpc-connect's hpc-run
+# (`python accelerate.py --help` from a payload shell), this import fails with
+# ModuleNotFoundError: No module named 'trend_utils', before argparse runs.
+# It works by hand only when the login environment or working directory
+# supplies exocam-trend. Setting PYTHONPATH in a payload is not the fix: the
+# guard then stops treating the script as vetted. Options: locate exocam-trend
+# relative to this file and add it to sys.path here, or install exocam-trend
+# as a package in the GEOSpyD environment.
 import trend_utils as trend
 import argparse
 import sys
